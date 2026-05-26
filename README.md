@@ -18,6 +18,7 @@
 
 本项目基于 [JunWan666/openclaw-termux-zh](https://github.com/JunWan666/openclaw-termux-zh) 改造，将 OpenClaw 替换为 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)，提供一个开箱即用的 Android 客户端。
 
+
 **核心变化：**
 - 运行时从 Node.js + npm 改为 Python 3 + pip
 - 配置从 JSON (`openclaw.json`) 改为 YAML (`config.yaml`)
@@ -104,3 +105,5 @@ flutter build apk --release
 ## 许可证
 
 MIT，详见 [LICENSE](LICENSE)。
+
+该readme与实际较不符合，第一次弄，不太会。
