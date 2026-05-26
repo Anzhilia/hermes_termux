@@ -1,0 +1,760 @@
+package com.nousresearch.hermes
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+import io.flutter.plugin.common.EventChannel
+import java.io.BufferedReader
+import java.io.File
+import java.io.InputStreamReader
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+class GatewayService : Service() {
+    companion object {
+        const val CHANNEL_ID = "hermes_gateway"
+        const val NOTIFICATION_ID = 1
+        @Volatile
+        var isRunning = false
+            private set
+        @Volatile
+        var logSink: EventChannel.EventSink? = null
+        private var instance: GatewayService? = null
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        private fun isGatewayPortResponding(
+            port: Int = 8642,
+            timeoutMs: Int = 150,
+        ): Boolean {
+            return try {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("127.0.0.1", port), timeoutMs)
+                    true
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        /** Check if the gateway process is actually alive (not just the flag).
+         *  Includes a loopback port probe so Flutter can still detect an
+         *  already-running gateway even if the service instance was recreated. */
+        fun isProcessAlive(): Boolean {
+            val inst = instance
+            if (inst?.stopping == true) return false
+
+            if (inst?.gatewayProcess?.isAlive == true) return true
+
+            // During startup the foreground service may not have a child
+            // process reference yet, but the worker thread is still alive.
+            if (inst?.gatewayThread?.isAlive == true) return true
+
+            // Extra safety: if the service state got desynced but the local
+            // gateway is still listening, report it as running.
+            if (isGatewayPortResponding()) return true
+
+            if (inst != null && isRunning) {
+                val elapsed = System.currentTimeMillis() - inst.startTime
+                return elapsed < 120_000
+            }
+
+            return false
+        }
+
+        fun start(context: Context) {
+            val intent = Intent(context, GatewayService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stop(context: Context) {
+            val intent = Intent(context, GatewayService::class.java)
+            context.stopService(intent)
+        }
+
+        fun stopAndWait(context: Context, timeoutMs: Long = 15_000L): Boolean {
+            val existing = instance
+            if (existing == null && isGatewayPortResponding()) {
+                stop(context)
+                // No service instance — force kill residual processes directly
+                killResidualGatewayProcesses()
+
+                val deadline = System.currentTimeMillis() + timeoutMs
+                while (System.currentTimeMillis() < deadline) {
+                    if (!isGatewayPortResponding()) {
+                        return true
+                    }
+                    try {
+                        Thread.sleep(200)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                }
+                // Last resort: force kill again
+                killResidualGatewayProcesses()
+                return !isGatewayPortResponding()
+            }
+
+            existing?.requestStop("user")
+            stop(context)
+
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < deadline) {
+                val service = instance ?: existing
+                if (service == null || service.isShutdownComplete()) {
+                    return true
+                }
+                try {
+                    Thread.sleep(200)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+
+            (instance ?: existing)?.requestStop("force-cleanup")
+            killResidualGatewayProcesses()
+            return (instance ?: existing)?.isShutdownComplete() ?: true
+        }
+
+        /**
+         * Kill all residual hermes gateway processes on the host system.
+         * Uses multiple strategies to ensure complete cleanup:
+         *   1. Kill by process name pattern (hermes, proot, python running hermes)
+         *   2. Kill by port 8642 (fuser/lsof)
+         */
+        private fun killResidualGatewayProcesses() {
+            // Strategy 1: Kill hermes-related processes
+            val killPatterns = listOf(
+                "hermes gateway run",
+                "hermes gateway",
+                "hermes_cli gateway",
+            )
+            for (pattern in killPatterns) {
+                try {
+                    val escaped = pattern.replace("'", "'\"'\"'")
+                    ProcessBuilder(
+                        "/system/bin/sh", "-c",
+                        "pkill -9 -f '$escaped' 2>/dev/null; true"
+                    ).start().waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (_: Exception) {}
+            }
+
+            // Strategy 2: Kill anything on port 8642
+            try {
+                ProcessBuilder(
+                    "/system/bin/sh", "-c",
+                    "for pid in \$(lsof -ti:8642 2>/dev/null); do kill -9 \$pid 2>/dev/null; done; true"
+                ).start().waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (_: Exception) {}
+
+            // Strategy 3: Kill any remaining proot processes running hermes
+            try {
+                ProcessBuilder(
+                    "/system/bin/sh", "-c",
+                    "pkill -9 -f 'proot.*hermes' 2>/dev/null; true"
+                ).start().waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (_: Exception) {}
+
+            // Strategy 4: Kill WS server by PID file (inside proot)
+            try {
+                ProcessBuilder(
+                    "/system/bin/sh", "-c",
+                    "if [ -f /tmp/node_ws_server.pid ]; then " +
+                    "  kill -9 \$(cat /tmp/node_ws_server.pid) 2>/dev/null; " +
+                    "  rm -f /tmp/node_ws_server.pid; " +
+                    "fi; true"
+                ).start().waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private var gatewayProcess: Process? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var restartCount = 0
+    private val maxRestarts = 5
+    private var startTime: Long = 0
+    private var processStartTime: Long = 0
+    private var uptimeThread: Thread? = null
+    private var watchdogThread: Thread? = null
+    private var gatewayThread: Thread? = null
+    private val lock = Object()
+    @Volatile private var stopping = false
+    private val ansiRegex = Regex("\\u001B\\[[0-9;]*[A-Za-z]")
+    private val leadingTimestampRegex = Regex("^(\\d{4}-\\d{2}-\\d{2}T\\S+)\\s+(.*)$")
+    private val logTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault())
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
+        if (isRunning) {
+            updateNotificationRunning()
+            return START_STICKY
+        }
+        stopping = false
+        acquireWakeLock()
+        startGateway()
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        requestStop("service-destroyed", waitForShutdown = false)
+        releaseWakeLock()
+        isRunning = false
+        instance = null
+        super.onDestroy()
+    }
+
+    /** Check if gateway port is already in use (another instance running). */
+    private fun isPortInUse(port: Int = 8642): Boolean {
+        return isGatewayPortResponding(port, timeoutMs = 1000)
+    }
+
+    private fun startGateway() {
+        synchronized(lock) {
+            if (stopping) return
+            if (gatewayProcess?.isAlive == true) return
+
+            isRunning = true
+            instance = this
+            startTime = System.currentTimeMillis()
+        }
+
+        gatewayThread = Thread {
+            try {
+                // Check if an existing gateway is already listening on the port.
+                // If so, kill it directly before starting a fresh instance.
+                if (isPortInUse()) {
+                    emitLog("[INFO] Port 8642 in use, killing existing gateway...")
+                    killResidualGatewayProcesses()
+                    // Wait for port to be released
+                    val killDeadline = System.currentTimeMillis() + 8000
+                    while (System.currentTimeMillis() < killDeadline && isPortInUse()) {
+                        Thread.sleep(500)
+                    }
+                    if (isPortInUse()) {
+                        emitLog("[WARN] Port 8642 still in use after kill, force killing again...")
+                        killResidualGatewayProcesses()
+                        Thread.sleep(2000)
+                    }
+                    if (isPortInUse()) {
+                        emitLog("[ERROR] Cannot free port 8642, gateway may fail to start")
+                    } else {
+                        emitLog("[INFO] Port 8642 freed successfully")
+                    }
+                }
+
+                emitLog("[INFO] Setting up environment...")
+                val filesDir = applicationContext.filesDir.absolutePath
+                val nativeLibDir = applicationContext.applicationInfo.nativeLibraryDir
+                val pm = ProcessManager(filesDir, nativeLibDir)
+
+                // Recreate all directories (config, tmp, home, lib, proc/sys fakes)
+                // in case Android cleared them after an app update (#40).
+                // This must run before proot 鈥?it needs bind-mount targets.
+                val bootstrapManager = BootstrapManager(applicationContext, filesDir, nativeLibDir)
+                try {
+                    bootstrapManager.setupDirectories()
+                    emitLog("[INFO] Directories ready")
+                } catch (e: Exception) {
+                    emitLog(
+                        "[WARN] setupDirectories failed: ${e.message} (" +
+                            HostFilesystem.describePathState("$filesDir/config") +
+                            ")"
+                    )
+                }
+                try {
+                    bootstrapManager.writeResolvConf()
+                } catch (e: Exception) {
+                    emitLog(
+                        "[WARN] writeResolvConf failed: ${e.message} (" +
+                            HostFilesystem.describePathState("$filesDir/config") +
+                            ")"
+                    )
+                }
+
+                // ★ Repair: ensure hermes_cli/__main__.py exists.
+                // Hermes upstream doesn't include this file, but pip's entry
+                // point and `python -m hermes_cli` both need it.
+                // Dynamically find the package location (works with any install method).
+                // ★ Fix: use venv python — hermes_cli is installed in venv,
+                // system python3 can't find it (exit code 127).
+                try {
+                    val pm2 = ProcessManager(filesDir, nativeLibDir)
+                    val pkgDir = pm2.runInProotSync(
+                        "VENV_PY=/root/.hermes/hermes-agent/venv/bin/python; " +
+                        "if [ -x \"\$VENV_PY\" ]; then " +
+                        "  \"\$VENV_PY\" -c \"import hermes_cli,os;print(os.path.dirname(hermes_cli.__file__))\" 2>/dev/null; " +
+                        "else " +
+                        "  python3 -c \"import hermes_cli,os;print(os.path.dirname(hermes_cli.__file__))\" 2>/dev/null; " +
+                        "fi",
+                        timeoutSeconds = 10,
+                    ).trim()
+                    if (pkgDir.isNotEmpty()) {
+                        val mainPy = File("$filesDir/rootfs/ubuntu$pkgDir/__main__.py")
+                        if (!mainPy.exists()) {
+                            val cliDir = mainPy.parentFile
+                            if (cliDir.isDirectory) {
+                                mainPy.writeText("from hermes_cli.main import main\nmain()\n")
+                                emitLog("[INFO] Created ${mainPy.path} (repair)")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    emitLog("[WARN] __main__.py repair failed: ${e.message}")
+                }
+
+                // Last-resort: verify resolv.conf exists, create inline if not
+                val resolvContent = "nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 8.8.8.8\n"
+                try {
+                    val resolvFile = HostFilesystem.ensureFileTargetReady(
+                        "$filesDir/config/resolv.conf",
+                        "gateway fallback resolv.conf"
+                    )
+                    if (!resolvFile.exists() || resolvFile.length() == 0L) {
+                        resolvFile.writeText(resolvContent)
+                        emitLog("[INFO] resolv.conf created (inline fallback)")
+                    }
+                } catch (e: Exception) {
+                    emitLog(
+                        "[WARN] inline resolv.conf fallback failed: ${e.message} (" +
+                            HostFilesystem.describePathState("$filesDir/config") +
+                            ")"
+                    )
+                }
+                // Also write into rootfs /etc/ so DNS works even if bind-mount fails
+                try {
+                    val rootfsResolv = HostFilesystem.ensureFileTargetReady(
+                        "$filesDir/rootfs/ubuntu/etc/resolv.conf",
+                        "gateway rootfs resolv.conf"
+                    )
+                    if (!rootfsResolv.exists() || rootfsResolv.length() == 0L) {
+                        rootfsResolv.writeText(resolvContent)
+                    }
+                } catch (_: Exception) {}
+
+                // Abort if stop was requested during setup
+                if (stopping) return@Thread
+
+                                // Final check right before launch — if port still in use, force kill
+                if (isPortInUse()) {
+                    emitLog("[WARN] Port 8642 still in use before launch, force killing...")
+                    killResidualGatewayProcesses()
+                    Thread.sleep(2000)
+                    if (isPortInUse()) {
+                        emitLog("[ERROR] Port 8642 still in use, gateway will likely fail")
+                    }
+                }
+
+                emitLog("[INFO] Spawning proot process...")
+                synchronized(lock) {
+                    if (stopping) return@Thread
+                    processStartTime = System.currentTimeMillis()
+                    // ★ Prepend PYTHONPATH/PYTHONHOME cleanup to prevent module
+                    // shadowing from Android JVM environment (install.sh does this too)
+                    gatewayProcess = pm.startProotProcess(
+                        "unset PYTHONPATH; unset PYTHONHOME; " +
+                        // ★ Start WS server as background process before gateway.
+                        // Kill old instance by PID file (avoid pkill -f which can
+                        // match the current process tree inside proot and cause SIGTERM).
+                        "if [ -f /tmp/node_ws_server.pid ]; then " +
+                        "  kill \$(cat /tmp/node_ws_server.pid) 2>/dev/null; " +
+                        "  rm -f /tmp/node_ws_server.pid; " +
+                        "fi; " +
+                        "rm -f /tmp/node_ws_server.ready; " +
+                        "/root/.hermes/hermes-agent/venv/bin/python -c 'import websockets' 2>/dev/null " +
+                        "|| /root/.hermes/hermes-agent/venv/bin/pip install websockets -q 2>/dev/null; " +
+                        "nohup /root/.hermes/hermes-agent/venv/bin/python " +
+                        "/root/.hermes/scripts/node_ws_server.py " +
+                        "> /tmp/node_ws_server.log 2>&1 & " +
+                        "echo \$! > /tmp/node_ws_server.pid; " +
+                        "hermes gateway run"
+                    )
+                }
+                updateNotificationRunning()
+                emitLog("[INFO] Gateway process spawned")
+
+                startUptimeTicker()
+                startWatchdog()
+
+                // Read stdout
+                val proc = gatewayProcess!!
+                val stdoutReader = BufferedReader(InputStreamReader(proc.inputStream))
+                Thread {
+                    try {
+                        var line: String?
+                        while (stdoutReader.readLine().also { line = it } != null) {
+                            val l = line ?: continue
+                            emitLog(l)
+                        }
+                    } catch (_: Exception) {}
+                }.start()
+
+                // Read stderr 鈥?log all lines on first attempt for debugging visibility
+                val stderrReader = BufferedReader(InputStreamReader(proc.errorStream))
+                val currentRestartCount = restartCount
+                Thread {
+                    try {
+                        var line: String?
+                        while (stderrReader.readLine().also { line = it } != null) {
+                            val l = line ?: continue
+                            if (isBenignStdioSanitizeWarning(l)) {
+                                continue
+                            }
+                            if (currentRestartCount == 0 ||
+                                (!l.contains("proot warning") && !l.contains("can't sanitize"))) {
+                                emitLog("[ERR] $l")
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }.start()
+
+                val exitCode = proc.waitFor()
+                val uptimeMs = System.currentTimeMillis() - processStartTime
+                val uptimeSec = uptimeMs / 1000
+                emitLog("[INFO] Gateway exited with code $exitCode (uptime: ${uptimeSec}s)")
+
+                // If stop was requested, don't auto-restart
+                if (stopping) return@Thread
+
+                // If the gateway ran for >60s, it was a transient crash 鈥?reset counter
+                if (uptimeMs > 60_000) {
+                    restartCount = 0
+                }
+
+                if (isRunning && restartCount < maxRestarts) {
+                    restartCount++
+                    // Cap delay at 16s to avoid excessively long waits
+                    val delayMs = minOf(2000L * (1 shl (restartCount - 1)), 16000L)
+                    emitLog("[INFO] Auto-restarting in ${delayMs / 1000}s (attempt $restartCount/$maxRestarts)...")
+                    updateNotification("Restarting in ${delayMs / 1000}s (attempt $restartCount)...")
+                    Thread.sleep(delayMs)
+                    if (!stopping) {
+                        startTime = System.currentTimeMillis()
+                        startGateway()
+                    }
+                } else if (restartCount >= maxRestarts) {
+                    emitLog("[WARN] Max restarts reached. Gateway stopped.")
+                    updateNotification("Gateway stopped (crashed)")
+                    isRunning = false
+                }
+            } catch (e: Exception) {
+                if (!stopping) {
+                    emitLog("[ERROR] Gateway error: ${e.message}")
+                    isRunning = false
+                    updateNotification("Gateway error")
+                }
+            }
+        }.also { it.start() }
+    }
+
+    private fun requestStop(reason: String, waitForShutdown: Boolean = true) {
+        synchronized(lock) {
+            if (stopping) {
+                return
+            }
+            stopping = true
+            isRunning = false
+            restartCount = maxRestarts // Prevent auto-restart
+            uptimeThread?.interrupt()
+            uptimeThread = null
+            watchdogThread?.interrupt()
+            watchdogThread = null
+            gatewayThread?.interrupt()
+        }
+
+        updateNotification("Stopping...")
+        emitLog("[INFO] Stopping gateway (kill mode)...")
+
+        // Direct kill: use kill(-pid, SIGTERM/SIGKILL) to kill the entire
+        // PRoot process tree (proot + bash + python + hermes).
+        // This is the only reliable way to stop PRoot-spawned processes.
+        val runningProcess = synchronized(lock) { gatewayProcess }
+        if (runningProcess != null) {
+            try {
+                val filesDir = applicationContext.filesDir.absolutePath
+                val nativeLibDir = applicationContext.applicationInfo.nativeLibraryDir
+                val pm = ProcessManager(filesDir, nativeLibDir)
+                pm.killProcessTree(runningProcess, force = false)
+                emitLog("[INFO] Process tree killed (SIGTERM)")
+            } catch (e: Exception) {
+                emitLog("[WARN] killProcessTree failed: ${e.message}, force killing...")
+                try { runningProcess.destroyForcibly() } catch (_: Exception) {}
+            }
+        }
+
+        // Clean up any residual processes (orphans from previous runs)
+        try {
+            val filesDir = applicationContext.filesDir.absolutePath
+            val nativeLibDir = applicationContext.applicationInfo.nativeLibraryDir
+            val pm = ProcessManager(filesDir, nativeLibDir)
+            // Try killing via PRoot PID file inside rootfs
+            try {
+                val pidProcess = pm.startProotProcess(
+                    "test -f ~/.hermes/gateway.pid && " +
+                    "kill -9 \$(cat ~/.hermes/gateway.pid) 2>/dev/null; " +
+                    "rm -f ~/.hermes/gateway.pid; true"
+                )
+                pidProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (_: Exception) {}
+        } catch (_: Exception) {}
+
+        // Kill any residual hermes/proot processes on the host
+        killResidualGatewayProcesses()
+
+        if (waitForShutdown) {
+            waitForShutdown()
+        }
+
+        synchronized(lock) {
+            gatewayProcess = null
+            gatewayThread = null
+            startTime = 0
+            processStartTime = 0
+        }
+
+        emitLog("[INFO] Gateway stopped by $reason")
+        updateNotification("Gateway stopped")
+    }
+
+    private fun isShutdownComplete(): Boolean {
+        val processAlive = synchronized(lock) { gatewayProcess?.isAlive == true }
+        if (processAlive) {
+            return false
+        }
+        if (gatewayThread?.isAlive == true) {
+            return false
+        }
+        return !isPortInUse()
+    }
+
+    private fun waitForShutdown(timeoutMs: Long = 10_000L) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (isShutdownComplete()) {
+                return
+            }
+            try {
+                Thread.sleep(200)
+            } catch (_: InterruptedException) {
+                return
+            }
+        }
+    }
+
+    /** Watchdog: periodically checks if the proot process is alive.
+     *  If the process dies and the waitFor() thread hasn't noticed yet,
+     *  this ensures isRunning is updated promptly. */
+    private fun startWatchdog() {
+        watchdogThread?.interrupt()
+        watchdogThread = Thread {
+            var observedResponsivePort = false
+            var consecutivePortMisses = 0
+            var portWarningActive = false
+            try {
+                // Wait 45s before first check 鈥?give the process time to start
+                Thread.sleep(45_000)
+                while (!Thread.interrupted() && isRunning && !stopping) {
+                    val proc = gatewayProcess
+                    if (proc != null && !proc.isAlive) {
+                        // Process died 鈥?the waitFor() thread should handle restart,
+                        // but update the flag in case it's stuck
+                        emitLog("[WARN] Watchdog: gateway process not alive")
+                        break
+                    }
+                    // Only warn after the port has responded at least once.
+                    // Hermes startup can legitimately take longer than
+                    // the initial watchdog delay on Android/proot.
+                    if (proc != null) {
+                        val portResponding = isPortInUse()
+                        if (portResponding) {
+                            if (portWarningActive) {
+                                emitLog("[INFO] Watchdog: port 8642 responding again")
+                            }
+                            observedResponsivePort = true
+                            consecutivePortMisses = 0
+                            portWarningActive = false
+                        } else if (observedResponsivePort) {
+                            consecutivePortMisses++
+                            if (consecutivePortMisses >= 2 && !portWarningActive) {
+                                emitLog("[WARN] Watchdog: port 8642 not responding")
+                                portWarningActive = true
+                            }
+                        }
+                    }
+                    Thread.sleep(15_000) // Check every 15s
+                }
+            } catch (_: InterruptedException) {}
+        }.apply { isDaemon = true; start() }
+    }
+
+    private fun startUptimeTicker() {
+        uptimeThread?.interrupt()
+        uptimeThread = Thread {
+            try {
+                while (!Thread.interrupted() && isRunning) {
+                    Thread.sleep(60_000) // Update every minute
+                    if (isRunning) {
+                        updateNotificationRunning()
+                    }
+                }
+            } catch (_: InterruptedException) {}
+        }.apply { isDaemon = true; start() }
+    }
+
+    private fun formatUptime(): String {
+        val elapsed = System.currentTimeMillis() - startTime
+        val seconds = elapsed / 1000
+        val minutes = seconds / 60
+        val hours = minutes / 60
+        return when {
+            hours > 0 -> "${hours}h ${minutes % 60}m"
+            minutes > 0 -> "${minutes}m"
+            else -> "${seconds}s"
+        }
+    }
+
+    private fun updateNotificationRunning() {
+        updateNotification("Gateway: http://127.0.0.1:8642 \u2022 ${formatUptime()}")
+    }
+
+    /** Emit a log message to the Flutter EventChannel.
+     *  MUST post to main thread 鈥?EventSink.success() is not thread-safe. */
+    private fun emitLog(message: String) {
+        try {
+            val formatted = normalizeLogLine(message)
+            if (formatted.isBlank()) return
+            GatewayLogPersistence.appendLine(applicationContext, formatted)
+            mainHandler.post {
+                try {
+                    logSink?.success(formatted)
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun isBenignStdioSanitizeWarning(message: String): Boolean {
+        return message.contains("proot warning") &&
+            (message.contains("can't sanitize binding \"/proc/self/fd/0\"") ||
+                message.contains("can't sanitize binding \"/proc/self/fd/1\"") ||
+                message.contains("can't sanitize binding \"/proc/self/fd/2\""))
+    }
+
+    private fun normalizeLogLine(message: String): String {
+        val cleaned = ansiRegex.replace(message, "").trim()
+        if (cleaned.isEmpty()) return ""
+
+        val match = leadingTimestampRegex.find(cleaned)
+        if (match != null) {
+            val parsed = formatTimestamp(match.groupValues[1])
+            if (parsed != null) {
+                return "$parsed ${match.groupValues[2]}".trim()
+            }
+        }
+
+        return "${logTimeFormatter.format(Instant.now())} $cleaned"
+    }
+
+    private fun formatTimestamp(raw: String): String? {
+        val instant = runCatching { Instant.parse(raw) }.getOrNull()
+            ?: runCatching { OffsetDateTime.parse(raw).toInstant() }.getOrNull()
+            ?: runCatching {
+                LocalDateTime.parse(raw).atZone(ZoneId.systemDefault()).toInstant()
+            }.getOrNull()
+
+        return instant?.let { logTimeFormatter.format(it) }
+    }
+
+    private fun acquireWakeLock() {
+        releaseWakeLock()
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "Hermes::GatewayWakeLock"
+        )
+        // Fix #6: No timeout — onDestroy() releases the lock.
+        // A 24h timeout risks the lock expiring while the service is still running.
+        wakeLock?.acquire()
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+        }
+        wakeLock = null
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Hermes Gateway",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps the Hermes gateway running in the background"
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildNotification(text: String): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+
+        builder.setContentTitle("Hermes Gateway")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+
+        // Show elapsed time chronometer when running
+        if (isRunning && startTime > 0) {
+            builder.setWhen(startTime)
+            builder.setShowWhen(true)
+            builder.setUsesChronometer(true)
+        }
+
+        return builder.build()
+    }
+
+    private fun updateNotification(text: String) {
+        try {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(NOTIFICATION_ID, buildNotification(text))
+        } catch (_: Exception) {}
+    }
+}

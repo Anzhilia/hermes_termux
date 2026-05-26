@@ -1,0 +1,53 @@
+buildscript {
+    repositories {
+        maven { url "https://maven.aliyun.com/repository/google" }
+        maven { url "https://maven.aliyun.com/repository/central" }
+        maven { url "https://maven.aliyun.com/repository/public" }
+        google()
+        mavenCentral()
+    }
+}
+
+allprojects {
+    repositories {
+        maven { url "https://maven.aliyun.com/repository/google" }
+        maven { url "https://maven.aliyun.com/repository/central" }
+        maven { url "https://maven.aliyun.com/repository/public" }
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+
+    // 强制所有子项目的 buildscript 仓库也走 mavenCentral
+    project.buildscript {
+        repositories {
+            maven { url "https://maven.aliyun.com/repository/google" }
+            maven { url "https://maven.aliyun.com/repository/central" }
+            maven { url "https://maven.aliyun.com/repository/public" }
+            google()
+            mavenCentral()
+        }
+    }
+
+    if (project.name != "app") {
+        project.ext.set("flutter", [
+                compileSdkVersion: 36,
+                minSdkVersion: 29,
+                targetSdkVersion: 36,
+                ndkVersion: "28.2.13676358"
+        ])
+    }
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

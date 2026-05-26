@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="512dp"
+    android:height="512dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <path
+        android:fillColor="#1e1b4b"
+        android:pathData="M108,0 L404,0 Q512,0,512,108 L512,404 Q512,512,404,512 L108,512 Q0,512,0,404
+L0,108 Q0,0,108,0 Z" />
+    <path
+        android:fillAlpha="0.2"
+        android:strokeColor="#f59e0b"
+        android:strokeAlpha="0.2"
+        android:strokeWidth="2"
+        android:pathData="M110,8 L402,8 Q504,8,504,110 L504,402 Q504,504,402,504 L110,504 Q8,504,8,402
+L8,110 Q8,8,110,8 Z" />
+    <path
+        android:fillColor="#f59e0b"
+        android:fillAlpha="0.85"
+        android:strokeAlpha="0.85"
+        android:strokeWidth="1"
+        android:pathData="M256,155 C230,110,170,80,105,95 C130,115,145,145,155,175
+C175,145,210,135,240,148 Z" />
+    <path
+        android:fillColor="#f59e0b"
+        android:fillAlpha="0.6"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="1"
+        android:pathData="M250,165 C225,130,175,110,120,128 C142,145,155,170,162,195
+C180,170,210,158,242,165 Z" />
+    <path
+        android:fillColor="#f59e0b"
+        android:fillAlpha="0.85"
+        android:strokeAlpha="0.85"
+        android:strokeWidth="1"
+        android:pathData="M256,155 C282,110,342,80,407,95 C382,115,367,145,357,175
+C337,145,302,135,272,148 Z" />
+    <path
+        android:fillColor="#f59e0b"
+        android:fillAlpha="0.6"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="1"
+        android:pathData="M262,165 C287,130,337,110,392,128 C370,145,357,170,350,195
+C332,170,302,158,270,165 Z" />
+    <path
+        android:fillColor="#000000"
+        android:strokeColor="#f59e0b"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:pathData="M256,140 L256,405" />
+    <path
+        android:fillColor="#f59e0b"
+        android:pathData="M256,105 C267.046,105,276,113.954,276,125 C276,136.046,267.046,145,256,145
+C244.954,145,236,136.046,236,125 C236,113.954,244.954,105,256,105 Z" />
+    <path
+        android:fillColor="#1e1b4b"
+        android:fillAlpha="0.4"
+        android:strokeAlpha="0.4"
+        android:strokeWidth="1"
+        android:pathData="M256,115 C261.523,115,266,119.477,266,125 C266,130.523,261.523,135,256,135
+C250.477,135,246,130.523,246,125 C246,119.477,250.477,115,256,115 Z" />
+    <path
+        android:strokeColor="#f59e0b"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M242,190 C210,215,225,255,245,275 C260,290,235,315,215,330
+C200,342,220,365,245,375" />
+    <path
+        android:fillColor="#f59e0b"
+        android:pathData="M240,176 C245.523,176,250,180.477,250,186 C250,191.523,245.523,196,240,196
+C234.477,196,230,191.523,230,186 C230,180.477,234.477,176,240,176 Z" />
+    <path
+        android:fillColor="#1e1b4b"
+        android:pathData="M237,180 C238.657,180,240,181.343,240,183 C240,184.657,238.657,186,237,186
+C235.343,186,234,184.657,234,183 C234,181.343,235.343,180,237,180 Z" />
+    <path
+        android:strokeColor="#f59e0b"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M270,190 C302,215,287,255,267,275 C252,290,277,315,297,330
+C312,342,292,365,267,375" />
+    <path
+        android:fillColor="#f59e0b"
+        android:pathData="M272,176 C277.523,176,282,180.477,282,186 C282,191.523,277.523,196,272,196
+C266.477,196,262,191.523,262,186 C262,180.477,266.477,176,272,176 Z" />
+    <path
+        android:fillColor="#1e1b4b"
+        android:pathData="M275,180 C276.657,180,278,181.343,278,183 C278,184.657,276.657,186,275,186
+C273.343,186,272,184.657,272,183 C272,181.343,273.343,180,275,180 Z" />
+    <path
+        android:fillColor="#000000"
+        android:strokeColor="#f59e0b"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M228,400 L284,400" />
+</vector>

@@ -1,0 +1,455 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../app.dart';
+import '../l10n/app_localizations.dart';
+import '../models/ai_provider.dart';
+import '../models/custom_provider_preset.dart';
+import '../providers/gateway_provider.dart';
+import '../services/provider_config_service.dart';
+import 'custom_provider_detail_screen.dart';
+import 'provider_detail_screen.dart';
+
+/// Lists all AI providers with their configuration status.
+class ProvidersScreen extends StatefulWidget {
+  const ProvidersScreen({super.key});
+
+  @override
+  State<ProvidersScreen> createState() => _ProvidersScreenState();
+}
+
+class _ProvidersScreenState extends State<ProvidersScreen> {
+  String? _activeModel;
+  Map<String, dynamic> _providers = {};
+  List<CustomProviderPreset> _customPresets = const [];
+  bool _loading = true;
+  bool _switchingPreset = false;
+
+  Map<String, dynamic>? _providerConfig(AiProvider provider) {
+    return _providers[provider.id] as Map<String, dynamic>?;
+  }
+
+  String? _configuredModelForProvider(AiProvider provider) {
+    final configuredModel = _providerConfig(provider)?['model'] as String?;
+    if (configuredModel == null || configuredModel.trim().isEmpty) {
+      return null;
+    }
+    return configuredModel.trim();
+  }
+
+  String? _modelIdFromRef(String modelRef) {
+    final separatorIndex = modelRef.indexOf('/');
+    if (separatorIndex < 0 || separatorIndex >= modelRef.length - 1) {
+      return modelRef;
+    }
+    return modelRef.substring(separatorIndex + 1);
+  }
+
+  bool _isProviderActive(AiProvider provider) {
+    final activeModel = _activeModel;
+    if (activeModel == null || activeModel.trim().isEmpty) {
+      return false;
+    }
+
+    final trimmedActiveModel = activeModel.trim();
+    final activeProviderId =
+        ProviderConfigService.providerIdFromModelRef(trimmedActiveModel);
+    if (activeProviderId != null) {
+      return activeProviderId == provider.id;
+    }
+
+    final configuredModel = _configuredModelForProvider(provider);
+    if (configuredModel != null) {
+      return configuredModel == trimmedActiveModel;
+    }
+
+    return provider.defaultModels.contains(trimmedActiveModel);
+  }
+
+  String? _existingModelForProvider(AiProvider provider) {
+    final configuredModel = _configuredModelForProvider(provider);
+    if (configuredModel != null) {
+      return configuredModel;
+    }
+
+    final activeModel = _activeModel;
+    if (activeModel == null || activeModel.trim().isEmpty) {
+      return null;
+    }
+
+    final trimmedActiveModel = activeModel.trim();
+    final activeProviderId =
+        ProviderConfigService.providerIdFromModelRef(trimmedActiveModel);
+    if (activeProviderId == provider.id) {
+      return _modelIdFromRef(trimmedActiveModel);
+    }
+
+    if (activeProviderId == null &&
+        provider.defaultModels.contains(trimmedActiveModel)) {
+      return trimmedActiveModel;
+    }
+
+    return null;
+  }
+
+  CustomProviderPreset? get _activeCustomPreset {
+    final activeModel = _activeModel;
+    if (activeModel == null || activeModel.isEmpty) {
+      return null;
+    }
+    for (final preset in _customPresets) {
+      if (preset.modelRef == activeModel) {
+        return preset;
+      }
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final config = await ProviderConfigService.readConfig();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _activeModel = config['activeModel'] as String?;
+      _providers = Map<String, dynamic>.from(
+        config['providers'] as Map? ?? const <String, dynamic>{},
+      );
+      _customPresets = List<CustomProviderPreset>.from(
+        config['customPresets'] as List? ?? const <CustomProviderPreset>[],
+      );
+      _loading = false;
+    });
+  }
+
+  Future<void> _openProvider(AiProvider provider) async {
+    final navigator = Navigator.of(context);
+    final result = provider.id == AiProvider.customOpenai.id
+        ? await navigator.push<bool>(
+            MaterialPageRoute(
+              builder: (_) => const CustomProviderDetailScreen(),
+            ),
+          )
+        : await navigator.push<bool>(
+            MaterialPageRoute(
+              builder: (_) => ProviderDetailScreen(
+                provider: provider,
+                existingApiKey: _providerConfig(provider)?['apiKey'] as String?,
+                existingBaseUrl:
+                    _providerConfig(provider)?['baseUrl'] as String?,
+                existingModel: _existingModelForProvider(provider),
+              ),
+            ),
+          );
+    if (result == true) {
+      await _refresh();
+    }
+  }
+
+  Future<void> _activateCustomPreset(CustomProviderPreset preset) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final l10n = context.l10n;
+    final gatewayProvider = context.read<GatewayProvider>();
+    setState(() => _switchingPreset = true);
+    try {
+      await ProviderConfigService.activateModel(preset.modelRef);
+      await gatewayProvider.applyConfigChanges(
+        source: 'provider preset ${preset.displayName}',
+      );
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.t(
+              'providersScreenPresetActivated',
+              {'preset': preset.displayName},
+            ),
+          ),
+        ),
+      );
+      await _refresh();
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.t('providerDetailSaveFailed', {'error': '$e'}),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _switchingPreset = false);
+      }
+    }
+  }
+
+  ({String label, bool isActive}) _statusInfo(AiProvider provider) {
+    final l10n = context.l10n;
+    if (provider.id == AiProvider.customOpenai.id) {
+      if (_customPresets.isEmpty) {
+        return (label: '', isActive: false);
+      }
+      final isActive = _activeCustomPreset != null;
+      return (
+        label: isActive
+            ? l10n.t('providersStatusActive')
+            : l10n.t('providersStatusConfigured'),
+        isActive: isActive,
+      );
+    }
+
+    final isConfigured = _providers.containsKey(provider.id);
+    if (!isConfigured) {
+      return (label: '', isActive: false);
+    }
+
+    if (_isProviderActive(provider)) {
+      return (label: l10n.t('providersStatusActive'), isActive: true);
+    }
+
+    return (
+      label: l10n.t('providersStatusConfigured'),
+      isActive: false,
+    );
+  }
+
+  String _customPresetMenuLabel(CustomProviderPreset preset) {
+    final secondary =
+        preset.alias.isNotEmpty ? preset.modelId : preset.providerId;
+    return '${preset.displayName} ($secondary)';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final activeCustomPreset = _activeCustomPreset;
+
+    return Scaffold(
+      appBar: AppBar(title: Text(l10n.t('providersScreenTitle'))),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                if (_activeModel != null && _activeModel!.isNotEmpty) ...[
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.statusGreen.withAlpha(25),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.check_circle,
+                              color: AppColors.statusGreen,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.t('providersScreenActiveModel'),
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: AppColors.statusGreen,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _activeModel!,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                if (activeCustomPreset != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    l10n.t(
+                                      'providersScreenActivePreset',
+                                      {
+                                        'preset': activeCustomPreset.displayName
+                                      },
+                                    ),
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (_customPresets.isNotEmpty)
+                            PopupMenuButton<CustomProviderPreset>(
+                              enabled: !_switchingPreset,
+                              tooltip: l10n.t('providersScreenPresetSwitch'),
+                              onSelected: _activateCustomPreset,
+                              itemBuilder: (_) => [
+                                for (final preset in _customPresets)
+                                  PopupMenuItem(
+                                    value: preset,
+                                    child: Text(
+                                      _customPresetMenuLabel(preset),
+                                    ),
+                                  ),
+                              ],
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color:
+                                      theme.colorScheme.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (_switchingPreset)
+                                      const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    else
+                                      const Icon(Icons.swap_horiz, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      l10n.t('providersScreenPresetSwitch'),
+                                      style: theme.textTheme.labelLarge,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                Text(
+                  l10n.t('providersScreenIntro'),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                for (final provider in AiProvider.all)
+                  _buildProviderCard(theme, provider, isDark),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildProviderCard(ThemeData theme, AiProvider provider, bool isDark) {
+    final iconBg = isDark ? AppColors.darkSurfaceAlt : const Color(0xFFF3F4F6);
+    final status = _statusInfo(provider);
+    final l10n = context.l10n;
+    final subtitle =
+        provider.id == AiProvider.customOpenai.id && _customPresets.isNotEmpty
+            ? l10n.t(
+                'providerDescriptionCustomOpenaiWithCount',
+                {'count': _customPresets.length},
+              )
+            : provider.description(l10n);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => _openProvider(provider),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(provider.icon, color: provider.color),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            provider.name(l10n),
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (status.label.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: (status.isActive
+                                      ? AppColors.statusGreen
+                                      : AppColors.statusAmber)
+                                  .withAlpha(25),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              status.label,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: status.isActive
+                                    ? AppColors.statusGreen
+                                    : AppColors.statusAmber,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

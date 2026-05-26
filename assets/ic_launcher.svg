@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#0c0a1d"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="200" y1="80" x2="312" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="50%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+    <linearGradient id="wingL" x1="120" y1="100" x2="256" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fef3c7"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="wingR" x1="392" y1="100" x2="256" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fef3c7"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+
+  <!-- Subtle outer border -->
+  <rect x="8" y="8" width="496" height="496" rx="102" fill="none" stroke="#f59e0b" stroke-width="2" opacity="0.2"/>
+
+  <!-- === Left Wing === -->
+  <path d="M256,155 C230,110 170,80 105,95 C130,115 145,145 155,175 C175,145 210,135 240,148 Z"
+        fill="url(#wingL)" opacity="0.85"/>
+  <path d="M250,165 C225,130 175,110 120,128 C142,145 155,170 162,195 C180,170 210,158 242,165 Z"
+        fill="url(#wingL)" opacity="0.6"/>
+
+  <!-- === Right Wing === -->
+  <path d="M256,155 C282,110 342,80 407,95 C382,115 367,145 357,175 C337,145 302,135 272,148 Z"
+        fill="url(#wingR)" opacity="0.85"/>
+  <path d="M262,165 C287,130 337,110 392,128 C370,145 357,170 350,195 C332,170 302,158 270,165 Z"
+        fill="url(#wingR)" opacity="0.6"/>
+
+  <!-- === Central Staff === -->
+  <line x1="256" y1="140" x2="256" y2="405" stroke="url(#gold)" stroke-width="9" stroke-linecap="round" filter="url(#glow)"/>
+
+  <!-- === Staff Top Orb === -->
+  <circle cx="256" cy="125" r="20" fill="url(#gold)" filter="url(#glow)"/>
+  <circle cx="256" cy="125" r="10" fill="#1e1b4b" opacity="0.4"/>
+
+  <!-- === Left Serpent === -->
+  <path d="M242,190 C210,215 225,255 245,275 C260,290 235,315 215,330 C200,342 220,365 245,375"
+        fill="none" stroke="url(#gold)" stroke-width="8" stroke-linecap="round" filter="url(#glow)"/>
+  <!-- Left serpent head -->
+  <circle cx="240" cy="186" r="10" fill="url(#gold)"/>
+  <circle cx="237" cy="183" r="3" fill="#1e1b4b"/>
+
+  <!-- === Right Serpent === -->
+  <path d="M270,190 C302,215 287,255 267,275 C252,290 277,315 297,330 C312,342 292,365 267,375"
+        fill="none" stroke="url(#gold)" stroke-width="8" stroke-linecap="round" filter="url(#glow)"/>
+  <!-- Right serpent head -->
+  <circle cx="272" cy="186" r="10" fill="url(#gold)"/>
+  <circle cx="275" cy="183" r="3" fill="#1e1b4b"/>
+
+  <!-- === Staff Base Crossbar === -->
+  <line x1="228" y1="400" x2="284" y2="400" stroke="url(#gold)" stroke-width="8" stroke-linecap="round"/>
+
+  <!-- === "H" watermark === -->
+  <text x="256" y="310" font-family="'Segoe UI',Arial,sans-serif" font-size="80" font-weight="700"
+        fill="#f59e0b" text-anchor="middle" opacity="0.08" letter-spacing="2">H</text>
+</svg>

@@ -1,0 +1,603 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../app.dart';
+import '../constants.dart';
+import '../l10n/app_localizations.dart';
+import '../providers/gateway_provider.dart';
+import '../providers/locale_provider.dart';
+import '../providers/node_provider.dart';
+import '../services/native_bridge.dart';
+import '../services/preferences_service.dart';
+import '../services/provider_config_service.dart';
+import '../services/update_flow_service.dart';
+import '../services/update_service.dart';
+import 'backup_manager_screen.dart';
+import 'node_screen.dart';
+import 'setup_wizard_screen.dart';
+
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  static const _showOrgSection = false;
+
+  final _prefs = PreferencesService();
+  bool _autoStart = false;
+  bool _bonjourEnabled = false;
+  bool _nodeEnabled = false;
+  bool _nodeAutoConnect = true;
+  bool _batteryOptimized = true;
+  String _arch = '';
+  String _prootPath = '';
+  Map<String, dynamic> _status = {};
+  bool _loading = true;
+  bool _goInstalled = false;
+  bool _brewInstalled = false;
+  bool _sshInstalled = false;
+  bool _adbInstalled = false;
+  bool _cpolarInstalled = false;
+  bool _storageGranted = false;
+  bool _persistentGatewayLogs = false;
+  bool _checkingUpdate = false;
+  bool _updatingBonjour = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    await _prefs.init();
+    _autoStart = _prefs.autoStartGateway;
+    _bonjourEnabled = await ProviderConfigService.readBonjourEnabled();
+    _prefs.bonjourEnabled = _bonjourEnabled;
+    _nodeEnabled = _prefs.nodeEnabled;
+    _nodeAutoConnect = _prefs.nodeAutoConnectWithGateway;
+
+    try {
+      final arch = await NativeBridge.getArch();
+      final prootPath = await NativeBridge.getProotPath();
+      final status = await NativeBridge.getBootstrapStatus();
+      final batteryOptimized = await NativeBridge.isBatteryOptimized();
+      final persistentGatewayLogs =
+          await NativeBridge.isGatewayLogPersistenceEnabled();
+      final storageGranted = await NativeBridge.hasStoragePermission();
+
+      // Check optional package statuses
+      final filesDir = await NativeBridge.getFilesDir();
+      final rootfs = '$filesDir/rootfs/ubuntu';
+      final goInstalled = File('$rootfs/usr/bin/go').existsSync();
+      final brewInstalled =
+          File('$rootfs/home/linuxbrew/.linuxbrew/bin/brew').existsSync();
+      final sshInstalled = File('$rootfs/usr/bin/ssh').existsSync();
+      final adbInstalled = File('$rootfs/usr/bin/adb').existsSync();
+      final cpolarInstalled = File('$rootfs/usr/local/bin/cpolar').existsSync();
+
+      setState(() {
+        _batteryOptimized = batteryOptimized;
+        _persistentGatewayLogs = persistentGatewayLogs;
+        _storageGranted = storageGranted;
+        _arch = arch;
+        _prootPath = prootPath;
+        _status = status;
+        _goInstalled = goInstalled;
+        _brewInstalled = brewInstalled;
+        _sshInstalled = sshInstalled;
+        _adbInstalled = adbInstalled;
+        _cpolarInstalled = cpolarInstalled;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _setBonjourEnabled(bool value) async {
+    final previous = _bonjourEnabled;
+    setState(() {
+      _bonjourEnabled = value;
+      _updatingBonjour = true;
+    });
+
+    try {
+      _prefs.bonjourEnabled = value;
+      await ProviderConfigService.setBonjourEnabled(value);
+      if (!mounted) return;
+      await context.read<GatewayProvider>().applyConfigChanges(
+            source: 'Bonjour discovery setting',
+          );
+    } catch (e) {
+      _prefs.bonjourEnabled = previous;
+      if (!mounted) return;
+      setState(() => _bonjourEnabled = previous);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.l10n.t('settingsBonjourUpdateFailed', {'error': '$e'}),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _updatingBonjour = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = context.l10n;
+    final localeProvider = context.watch<LocaleProvider>();
+
+    return Scaffold(
+      appBar: AppBar(title: Text(l10n.t('settingsTitle'))),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                _sectionHeader(theme, l10n.t('settingsGeneral')),
+                SwitchListTile(
+                  title: Text(l10n.t('settingsAutoStart')),
+                  subtitle: Text(l10n.t('settingsAutoStartSubtitle')),
+                  value: _autoStart,
+                  onChanged: (value) {
+                    setState(() => _autoStart = value);
+                    _prefs.autoStartGateway = value;
+                  },
+                ),
+                SwitchListTile(
+                  title: Text(l10n.t('settingsPersistentGatewayLogs')),
+                  subtitle:
+                      Text(l10n.t('settingsPersistentGatewayLogsSubtitle')),
+                  value: _persistentGatewayLogs,
+                  onChanged: (value) async {
+                    await NativeBridge.setGatewayLogPersistenceEnabled(value);
+                    setState(() => _persistentGatewayLogs = value);
+                  },
+                ),
+                SwitchListTile(
+                  title: Text(l10n.t('settingsBonjourDiscovery')),
+                  subtitle: Text(l10n.t('settingsBonjourDiscoverySubtitle')),
+                  value: _bonjourEnabled,
+                  onChanged: _updatingBonjour
+                      ? null
+                      : (value) => _setBonjourEnabled(value),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: localeProvider.localeCode,
+                    decoration: InputDecoration(labelText: l10n.t('language')),
+                    items: [
+                      DropdownMenuItem(
+                        value: 'system',
+                        child: Text(l10n.t('languageSystem')),
+                      ),
+                      DropdownMenuItem(
+                        value: 'en',
+                        child: Text(l10n.t('languageEnglish')),
+                      ),
+                      DropdownMenuItem(
+                        value: 'zh',
+                        child: Text(l10n.t('languageChinese')),
+                      ),
+                      DropdownMenuItem(
+                        value: 'zh-Hant',
+                        child: Text(l10n.t('languageTraditionalChinese')),
+                      ),
+                      DropdownMenuItem(
+                        value: 'ja',
+                        child: Text(l10n.t('languageJapanese')),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        localeProvider.setLocaleCode(value);
+                      }
+                    },
+                  ),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsBatteryOptimization')),
+                  subtitle: Text(_batteryOptimized
+                      ? l10n.t('settingsBatteryOptimized')
+                      : l10n.t('settingsBatteryUnrestricted')),
+                  leading: const Icon(Icons.battery_alert),
+                  trailing: _batteryOptimized
+                      ? const Icon(Icons.warning, color: AppColors.statusAmber)
+                      : const Icon(Icons.check_circle,
+                          color: AppColors.statusGreen),
+                  onTap: () async {
+                    await NativeBridge.requestBatteryOptimization();
+                    // Refresh status after returning from settings
+                    final optimized = await NativeBridge.isBatteryOptimized();
+                    setState(() => _batteryOptimized = optimized);
+                  },
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsStorage')),
+                  subtitle: Text(_storageGranted
+                      ? l10n.t('settingsStorageGranted')
+                      : l10n.t('settingsStorageMissing')),
+                  leading: const Icon(Icons.sd_storage),
+                  trailing: _storageGranted
+                      ? const Icon(Icons.check_circle,
+                          color: AppColors.statusGreen)
+                      : const Icon(Icons.warning, color: AppColors.statusAmber),
+                  onTap: () async {
+                    final shouldRequest = await showDialog<bool>(
+                      context: context,
+                      builder: (dialogContext) => AlertDialog(
+                        title: Text(l10n.t('settingsStorageDialogTitle')),
+                        content: Text(l10n.t('settingsStorageDialogBody')),
+                        actions: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(false),
+                            child: Text(l10n.t('commonCancel')),
+                          ),
+                          FilledButton(
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(true),
+                            child: Text(l10n.t('settingsStorageDialogAction')),
+                          ),
+                        ],
+                      ),
+                    );
+
+                    if (shouldRequest != true) {
+                      return;
+                    }
+
+                    await NativeBridge.requestStoragePermission();
+                    // Refresh after returning from permission screen
+                    final granted = await NativeBridge.hasStoragePermission();
+                    setState(() => _storageGranted = granted);
+                  },
+                ),
+                const Divider(),
+                _sectionHeader(theme, 'GitHub 加速'),
+                ListTile(
+                  title: const Text('下载代理'),
+                  subtitle: Text(
+                    '当前: ${AppConstants.currentProxy.name}\n'
+                    '国内网络访问 GitHub 较慢，可选择加速代理',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _showProxySelector(context),
+                ),
+                const Divider(),
+                _sectionHeader(theme, l10n.t('settingsNode')),
+                SwitchListTile(
+                  title: Text(l10n.t('settingsEnableNode')),
+                  subtitle: Text(l10n.t('settingsEnableNodeSubtitle')),
+                  value: _nodeEnabled,
+                  onChanged: (value) {
+                    setState(() => _nodeEnabled = value);
+                    _prefs.nodeEnabled = value;
+                    final nodeProvider = context.read<NodeProvider>();
+                    if (value) {
+                      nodeProvider.enable();
+                    } else {
+                      nodeProvider.disable();
+                    }
+                  },
+                ),
+                // ★ 随网关自动连接开关
+                SwitchListTile(
+                  title: const Text('随网关自动连接'),
+                  subtitle: const Text('开启网关时自动连接节点，关闭网关时自动断开'),
+                  value: _nodeAutoConnect,
+                  onChanged: _nodeEnabled
+                      ? (value) {
+                          setState(() => _nodeAutoConnect = value);
+                          _prefs.nodeAutoConnectWithGateway = value;
+                        }
+                      : null,
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsNodeConfiguration')),
+                  subtitle: Text(l10n.t('settingsNodeConfigurationSubtitle')),
+                  leading: const Icon(Icons.devices),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const NodeScreen()),
+                  ),
+                ),
+                const Divider(),
+                _sectionHeader(theme, l10n.t('settingsMaintenance')),
+                ListTile(
+                  title: Text(l10n.t('settingsBackupCenterTitle')),
+                  subtitle: Text(l10n.t('settingsBackupCenterSubtitle')),
+                  leading: const Icon(Icons.backup_table_rounded),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const BackupManagerScreen(),
+                    ),
+                  ),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsRerunSetup')),
+                  subtitle: Text(l10n.t('settingsRerunSetupSubtitle')),
+                  leading: const Icon(Icons.build),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(
+                      builder: (_) => const SetupWizardScreen(),
+                    ),
+                  ),
+                ),
+                const Divider(),
+                _sectionHeader(theme, l10n.t('settingsSystemInfo')),
+                ListTile(
+                  title: Text(l10n.t('settingsArchitecture')),
+                  subtitle: Text(_arch),
+                  leading: const Icon(Icons.memory),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsProotPath')),
+                  subtitle: Text(_prootPath),
+                  leading: const Icon(Icons.folder),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsRootfs')),
+                  subtitle: Text(_status['rootfsExists'] == true
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.storage),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsNodeJs')),
+                  subtitle: Text(_status['pythonInstalled'] == true
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.code),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsHermes')),
+                  subtitle: Text(_status['hermesInstalled'] == true
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.cloud),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsGo')),
+                  subtitle: Text(_goInstalled
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.integration_instructions),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsHomebrew')),
+                  subtitle: Text(_brewInstalled
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.science),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsOpenSsh')),
+                  subtitle: Text(_sshInstalled
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.vpn_key),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsAdb')),
+                  subtitle: Text(_adbInstalled
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.developer_mode),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsCpolar')),
+                  subtitle: Text(_cpolarInstalled
+                      ? l10n.t('statusInstalled')
+                      : l10n.t('statusNotInstalled')),
+                  leading: const Icon(Icons.hub),
+                ),
+                const Divider(),
+                _sectionHeader(theme, l10n.t('settingsAbout')),
+                ListTile(
+                  title: Text(l10n.t('settingsHermes')),
+                  subtitle: Text(
+                    l10n.t('settingsAboutSubtitle',
+                        {'version': AppConstants.version}),
+                  ),
+                  leading: const Icon(Icons.info_outline),
+                  isThreeLine: true,
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsDeveloper')),
+                  subtitle: const Text(AppConstants.authorName),
+                  leading: const Icon(Icons.person),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsCheckForUpdates')),
+                  subtitle: Text(l10n.t('settingsCheckForUpdatesSubtitle')),
+                  leading: _checkingUpdate
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.system_update),
+                  onTap: _checkingUpdate ? null : _checkForUpdates,
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsGithub')),
+                  subtitle: const Text('AnZhili/hermes-termux-zh'),
+                  leading: const Icon(Icons.code),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => launchUrl(
+                    Uri.parse(AppConstants.githubUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsContact')),
+                  subtitle: const Text(AppConstants.authorEmail),
+                  leading: const Icon(Icons.email),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => launchUrl(
+                    Uri.parse('mailto:${AppConstants.authorEmail}'),
+                  ),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsEmail')),
+                  subtitle: const Text(AppConstants.authorEmail),
+                  leading: const Icon(Icons.email_outlined),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => launchUrl(
+                    Uri.parse('mailto:${AppConstants.authorEmail}'),
+                  ),
+                ),
+                ListTile(
+                  title: Text(l10n.t('settingsLicense')),
+                  subtitle: const Text(AppConstants.license),
+                  leading: const Icon(Icons.description),
+                ),
+                Visibility(
+                  visible: _showOrgSection,
+                  maintainState: true,
+                  child: Column(
+                    children: [
+                      const Divider(),
+                      _sectionHeader(theme, AppConstants.orgName.toUpperCase()),
+                      ListTile(
+                        title: const Text('Instagram'),
+                        subtitle: const Text('@nexgenxplorer_nxg'),
+                        leading: const Icon(Icons.camera_alt),
+                        trailing: const Icon(Icons.open_in_new, size: 18),
+                        onTap: () => launchUrl(
+                          Uri.parse(AppConstants.instagramUrl),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                      ),
+                      ListTile(
+                        title: const Text('YouTube'),
+                        subtitle: const Text('@nexgenxplorer'),
+                        leading: const Icon(Icons.play_circle_fill),
+                        trailing: const Icon(Icons.open_in_new, size: 18),
+                        onTap: () => launchUrl(
+                          Uri.parse(AppConstants.youtubeUrl),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                      ),
+                      ListTile(
+                        title: Text(l10n.t('settingsPlayStore')),
+                        subtitle: const Text('NextGenX Apps'),
+                        leading: const Icon(Icons.shop),
+                        trailing: const Icon(Icons.open_in_new, size: 18),
+                        onTap: () => launchUrl(
+                          Uri.parse(AppConstants.playStoreUrl),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Future<void> _checkForUpdates() async {
+    final l10n = context.l10n;
+    setState(() => _checkingUpdate = true);
+    try {
+      final result = await UpdateService.check();
+      if (!mounted) return;
+      if (result.available) {
+        await UpdateFlowService.showUpdateDialog(context, result);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(l10n.t('settingsLatestVersion'))),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.t('settingsUpdateCheckFailed'))),
+      );
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
+    }
+  }
+
+  void _showProxySelector(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                '选择 GitHub 下载代理',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                '国内访问 GitHub 较慢，选择代理可加速下载。\n默认直连，无需配置。',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ...List.generate(AppConstants.githubProxies.length, (index) {
+              final proxy = AppConstants.githubProxies[index];
+              final isSelected = index == AppConstants.selectedProxyIndex;
+              return RadioListTile<int>(
+                title: Text(proxy.name),
+                subtitle: Text(
+                  proxy.prefix.isEmpty ? '不使用代理' : proxy.prefix,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                value: index,
+                groupValue: AppConstants.selectedProxyIndex,
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => AppConstants.selectedProxyIndex = value);
+                    _prefs.saveInt('github_proxy_index', value);
+                    Navigator.pop(ctx);
+                  }
+                },
+                secondary: isSelected
+                    ? Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary)
+                    : null,
+              );
+            }),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionHeader(ThemeData theme, String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(
+        title,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
+  }
+}
