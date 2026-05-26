@@ -394,4 +394,222 @@ class NativeBridge {
     return await _channel
         .invokeMethod('setRootPassword', {'password': password});
   }
+
+  // ==========================================================================
+  // Accessibility Service — UI Automation
+  // ==========================================================================
+
+  /// 无障碍服务是否已连接
+  static Future<bool> isAccessibilityServiceRunning() async {
+    return await _channel.invokeMethod('isAccessibilityServiceRunning');
+  }
+
+  /// 打开系统无障碍设置页面
+  static Future<bool> openAccessibilitySettings() async {
+    return await _channel.invokeMethod('openAccessibilitySettings');
+  }
+
+  /// dump UI 树 (XML)
+  static Future<String> a11yDumpTree() async {
+    return await _channel.invokeMethod('a11yDumpTree');
+  }
+
+  /// 手势点击
+  static Future<bool> a11yTap(int x, int y) async {
+    return await _channel.invokeMethod('a11yTap', {'x': x, 'y': y});
+  }
+
+  /// 滑动手势
+  static Future<bool> a11ySwipe(
+      int x1, int y1, int x2, int y2, int duration) async {
+    return await _channel.invokeMethod('a11ySwipe', {
+      'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'duration': duration,
+    });
+  }
+
+  /// 输入文本
+  static Future<bool> a11yInput(String text, {bool append = false}) async {
+    return await _channel
+        .invokeMethod('a11yInput', {'text': text, 'append': append});
+  }
+
+  /// 全局按键 (back / home / recents / notifications)
+  static Future<bool> a11yKey(String key) async {
+    return await _channel.invokeMethod('a11yKey', {'key': key});
+  }
+
+  /// 滚动 (up / down / left / right)
+  static Future<bool> a11yScroll(String direction) async {
+    return await _channel.invokeMethod('a11yScroll', {'direction': direction});
+  }
+
+  /// 查找 UI 元素
+  static Future<List<dynamic>> a11yFind({
+    String? text,
+    String? id,
+    String? description,
+    String? className,
+    bool clickableOnly = false,
+  }) async {
+    final result = await _channel.invokeMethod('a11yFind', {
+      'text': text ?? '',
+      'id': id ?? '',
+      'description': description ?? '',
+      'class_name': className ?? '',
+      'clickable_only': clickableOnly,
+    });
+    return List<dynamic>.from(result ?? []);
+  }
+
+  /// 等待元素出现
+  static Future<bool> a11yWait({
+    String? text,
+    String? id,
+    String? description,
+    int timeout = 5000,
+    int pollInterval = 300,
+  }) async {
+    return await _channel.invokeMethod('a11yWait', {
+      'text': text ?? '',
+      'id': id ?? '',
+      'description': description ?? '',
+      'timeout': timeout,
+      'poll_interval': pollInterval,
+    });
+  }
+
+  /// 按文本点击
+  static Future<bool> a11yClickText(String text) async {
+    return await _channel.invokeMethod('a11yClickText', {'text': text});
+  }
+
+  /// 按 resource-id 点击
+  static Future<bool> a11yClickId(String id) async {
+    return await _channel.invokeMethod('a11yClickId', {'id': id});
+  }
+
+  /// 截图 (返回 base64 JPEG)
+  static Future<String?> a11yScreenshot() async {
+    return await _channel.invokeMethod('a11yScreenshot');
+  }
+
+  /// 获取当前前台 App
+  static Future<Map<String, dynamic>> a11yCurrentApp() async {
+    final result = await _channel.invokeMethod('a11yCurrentApp');
+    return Map<String, dynamic>.from(result);
+  }
+
+  /// 获取设备信息
+  static Future<Map<String, dynamic>> a11yDeviceInfo() async {
+    final result = await _channel.invokeMethod('a11yDeviceInfo');
+    return Map<String, dynamic>.from(result);
+  }
+
+  /// 读取剪贴板
+  static Future<String> a11yClipboardRead() async {
+    return await _channel.invokeMethod('a11yClipboardRead') ?? '';
+  }
+
+  /// 写入剪贴板
+  static Future<bool> a11yClipboardWrite(String text) async {
+    return await _channel.invokeMethod('a11yClipboardWrite', {'text': text});
+  }
+
+  /// 获取/设置音量
+  static Future<dynamic> a11yVolume({String? stream, int? level}) async {
+    final args = <String, dynamic>{};
+    if (stream != null) args['stream'] = stream;
+    if (level != null) args['level'] = level;
+    return await _channel.invokeMethod('a11yVolume', args);
+  }
+
+  /// 获取像素颜色
+  static Future<String?> a11yColor(int x, int y) async {
+    return await _channel.invokeMethod('a11yColor', {'x': x, 'y': y});
+  }
+
+  /// 获取已安装 App 列表
+  static Future<List<dynamic>> a11yInstalledApps() async {
+    final result = await _channel.invokeMethod('a11yInstalledApps');
+    return List<dynamic>.from(result ?? []);
+  }
+
+  /// 启动 App
+  static Future<bool> a11yLaunchApp(String package,
+      {String? action, String? uri, String? type}) async {
+    return await _channel.invokeMethod('a11yLaunchApp', {
+      'package': package,
+      'action': action ?? '',
+      'uri': uri ?? '',
+      'type': type ?? '',
+    });
+  }
+
+  /// OCR 识别 (截图 + ML Kit)
+  static Future<String?> a11yOcr() async {
+    return await _channel.invokeMethod('a11yOcr');
+  }
+
+  /// 是否有 UsageStats 权限
+  static Future<bool> a11yHasUsageStatsPermission() async {
+    return await _channel.invokeMethod('a11yHasUsageStatsPermission');
+  }
+
+  /// 打开 UsageStats 设置页
+  static Future<bool> a11yOpenUsageStatsSettings() async {
+    return await _channel.invokeMethod('a11yOpenUsageStatsSettings');
+  }
+
+  // ==========================================================================
+  // Toast
+  // ==========================================================================
+
+  /// 显示 Toast 提示
+  static Future<bool> showToast(String message, {bool isLong = false}) async {
+    return await _channel.invokeMethod(
+        'showToast', {'message': message, 'long': isLong});
+  }
+
+  // ==========================================================================
+  // JS Bridge — 浏览器 JS 注入
+  // ==========================================================================
+
+  /// 启动 JS Bridge WebSocket Server
+  static Future<bool> startJsBridge({int port = 8767}) async {
+    return await _channel.invokeMethod('startJsBridge', {'port': port});
+  }
+
+  /// 停止 JS Bridge Server
+  static Future<bool> stopJsBridge() async {
+    return await _channel.invokeMethod('stopJsBridge');
+  }
+
+  /// JS Bridge 是否在运行
+  static Future<bool> isJsBridgeRunning() async {
+    return await _channel.invokeMethod('isJsBridgeRunning');
+  }
+
+  /// 获取 JS Bridge 状态信息
+  static Future<Map<String, dynamic>> jsBridgeInfo() async {
+    final result = await _channel.invokeMethod('jsBridgeInfo');
+    return Map<String, dynamic>.from(result);
+  }
+
+  /// 在已连接的浏览器中执行 JS 代码
+  static Future<String> execJsOnBrowser(String code,
+      {int timeoutMs = 10000}) async {
+    return await _channel.invokeMethod('execJsOnBrowser', {
+      'code': code,
+      'timeout_ms': timeoutMs,
+    });
+  }
+
+  /// 获取 JS Bridge 油猴脚本
+  static Future<String> getJsBridgeUserscript(
+      String serverIp, int serverPort) async {
+    return await _channel.invokeMethod('getJsBridgeUserscript', {
+      'server_ip': serverIp,
+      'server_port': serverPort,
+    });
+  }
 }

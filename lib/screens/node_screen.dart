@@ -188,6 +188,12 @@ class _NodeScreenState extends State<NodeScreen> {
                     _sectionHeader(theme, l10n.t('nodeCapabilities')),
                     _capabilityTile(
                       theme,
+                      '无障碍服务',
+                      'UI 自动化：点击、滑动、输入、截图、OCR 等',
+                      Icons.accessibility_new,
+                    ),
+                    _capabilityTile(
+                      theme,
                       l10n.t('nodeCapabilityCameraTitle'),
                       l10n.t('nodeCapabilityCameraSubtitle'),
                       Icons.camera_alt,

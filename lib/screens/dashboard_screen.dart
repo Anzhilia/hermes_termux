@@ -22,6 +22,7 @@ import 'logs_screen.dart';
 // Message platforms screen disabled — Hermes does not support CLI channel control
 // import 'message_platforms_screen.dart';
 import 'node_screen.dart';
+import 'accessibility_screen.dart';
 import 'packages_screen.dart';
 import 'providers_screen.dart';
 import 'settings_screen.dart';
@@ -444,6 +445,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                   onTap: () => _openScreen(const NodeScreen()),
                 );
               },
+            ),
+            StatusCard(
+              title: '无障碍服务',
+              subtitle: 'UI 自动化能力管理',
+              icon: Icons.accessibility_new,
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _openScreen(const AccessibilityScreen()),
             ),
             StatusCard(
               title: _guidesTitle(context, l10n),

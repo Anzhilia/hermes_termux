@@ -28,6 +28,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.OpenableColumns
+import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 import android.webkit.WebView
 import io.flutter.embedding.android.FlutterActivity
@@ -926,6 +927,568 @@ class MainActivity : FlutterActivity() {
                         }
                     }.start()
                 }
+                }
+
+                // =====================================================================
+                // Accessibility Service — UI Automation
+                // =====================================================================
+
+                "isAccessibilityServiceRunning" -> {
+                    result.success(AutoService.isConnected())
+                }
+
+                "openAccessibilitySettings" -> {
+                    try {
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("A11Y_ERROR", e.message, null)
+                    }
+                }
+
+                "a11yDumpTree" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val xml = service.dumpUITree()
+                                runOnUiThread { result.success(xml) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yTap" -> {
+                    val x = call.argument<Int>("x") ?: -1
+                    val y = call.argument<Int>("y") ?: -1
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = service.tapViaGesture(x, y)
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11ySwipe" -> {
+                    val x1 = call.argument<Int>("x1") ?: -1
+                    val y1 = call.argument<Int>("y1") ?: -1
+                    val x2 = call.argument<Int>("x2") ?: -1
+                    val y2 = call.argument<Int>("y2") ?: -1
+                    val duration = call.argument<Int>("duration")?.toLong() ?: 300L
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = service.swipe(x1, y1, x2, y2, duration)
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yInput" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    val append = call.argument<Boolean>("append") ?: false
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = service.inputText(text, append)
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yKey" -> {
+                    val key = call.argument<String>("key") ?: ""
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = when (key.lowercase()) {
+                                    "back" -> service.pressBack()
+                                    "home" -> service.pressHome()
+                                    "recents", "recent" -> service.pressRecents()
+                                    "notifications" -> service.openNotifications()
+                                    else -> false
+                                }
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yScroll" -> {
+                    val direction = call.argument<String>("direction") ?: "down"
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = when (direction.lowercase()) {
+                                    "up" -> service.scrollUp()
+                                    "down" -> service.scrollDown()
+                                    "left" -> service.scrollLeft()
+                                    "right" -> service.scrollRight()
+                                    else -> service.scrollDown()
+                                }
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yFind" -> {
+                    val text = call.argument<String>("text")?.ifEmpty { null }
+                    val id = call.argument<String>("id")?.ifEmpty { null }
+                    val desc = call.argument<String>("description")?.ifEmpty { null }
+                    val className = call.argument<String>("class_name")?.ifEmpty { null }
+                    val clickableOnly = call.argument<Boolean>("clickable_only") ?: false
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val nodes = service.findElements(
+                                    text = text, id = id, description = desc,
+                                    className = className, clickableOnly = clickableOnly
+                                )
+                                runOnUiThread { result.success(nodes) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yWait" -> {
+                    val text = call.argument<String>("text")?.ifEmpty { null }
+                    val id = call.argument<String>("id")?.ifEmpty { null }
+                    val desc = call.argument<String>("description")?.ifEmpty { null }
+                    val timeout = call.argument<Int>("timeout")?.toLong() ?: 5000L
+                    val pollInterval = call.argument<Int>("poll_interval")?.toLong() ?: 300L
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val found = service.waitForElement(
+                                    text = text, id = id, description = desc,
+                                    timeoutMs = timeout, pollIntervalMs = pollInterval
+                                )
+                                runOnUiThread { result.success(found != null) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yClickText" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = service.clickText(text)
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yClickId" -> {
+                    val id = call.argument<String>("id") ?: ""
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = service.clickById(id)
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yScreenshot" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val file = java.io.File(cacheDir, "a11y_screenshot.jpg")
+                                val latch = java.util.concurrent.CountDownLatch(1)
+                                val ok = service.takeScreenshot(file.absolutePath, latch)
+                                if (!ok) {
+                                    runOnUiThread { result.error("A11Y_ERROR", "Screenshot failed (requires Android 11+)", null) }
+                                    return@Thread
+                                }
+                                latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                                if (file.exists() && file.length() > 0) {
+                                    val bytes = file.readBytes()
+                                    val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                    file.delete()
+                                    runOnUiThread { result.success(b64) }
+                                } else {
+                                    file.delete()
+                                    runOnUiThread { result.error("A11Y_ERROR", "Screenshot file not ready", null) }
+                                }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yCurrentApp" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val app = service.getCurrentApp()
+                                runOnUiThread {
+                                    result.success(hashMapOf(
+                                        "package_name" to (app?.get("package_name") ?: ""),
+                                        "app_name" to (app?.get("app_name") ?: ""),
+                                        "activity" to (app?.get("activity") ?: "")
+                                    ))
+                                }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yDeviceInfo" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val info = service.getDeviceInfo()
+                                runOnUiThread { result.success(info.mapValues { it.value.toString() }) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yClipboardRead" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        try {
+                            val text = service.readClipboard()
+                            result.success(text ?: "")
+                        } catch (e: Exception) {
+                            result.error("A11Y_ERROR", e.message, null)
+                        }
+                    }
+                }
+
+                "a11yClipboardWrite" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        try {
+                            val ok = service.writeClipboard(text)
+                            result.success(ok)
+                        } catch (e: Exception) {
+                            result.error("A11Y_ERROR", e.message, null)
+                        }
+                    }
+                }
+
+                "a11yVolume" -> {
+                    val stream = call.argument<String>("stream") ?: ""
+                    val level = call.argument<Int>("level") ?: -1
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        try {
+                            if (stream.isEmpty() && level < 0) {
+                                val info = service.getVolumeInfo()
+                                result.success(info.mapValues { it.value.toString() })
+                            } else if (stream.isNotEmpty() && level >= 0) {
+                                val ok = service.setVolume(stream, level)
+                                result.success(ok)
+                            } else {
+                                result.error("A11Y_INVALID_ARGS", "Provide 'stream'+'level' to set, or empty to get", null)
+                            }
+                        } catch (e: Exception) {
+                            result.error("A11Y_ERROR", e.message, null)
+                        }
+                    }
+                }
+
+                "a11yColor" -> {
+                    val x = call.argument<Int>("x") ?: -1
+                    val y = call.argument<Int>("y") ?: -1
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val color = service.getPixelColor(x, y)
+                                runOnUiThread { result.success(color ?: "") }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yInstalledApps" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val apps = service.getInstalledApps()
+                                runOnUiThread { result.success(apps) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yLaunchApp" -> {
+                    val pkg = call.argument<String>("package") ?: ""
+                    val action = call.argument<String>("action") ?: ""
+                    val uri = call.argument<String>("uri") ?: ""
+                    val type = call.argument<String>("type") ?: ""
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val ok = service.launchApp(
+                                    packageName = pkg.ifEmpty { null },
+                                    action = action.ifEmpty { null },
+                                    uri = uri.ifEmpty { null },
+                                    type = type.ifEmpty { null }
+                                )
+                                runOnUiThread { result.success(ok) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yOcr" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        Thread {
+                            try {
+                                val file = java.io.File(cacheDir, "a11y_ocr_temp.jpg")
+                                val latch = java.util.concurrent.CountDownLatch(1)
+                                val ok = service.takeScreenshot(file.absolutePath, latch)
+                                if (!ok) {
+                                    runOnUiThread { result.error("A11Y_ERROR", "Screenshot failed (requires Android 11+)", null) }
+                                    return@Thread
+                                }
+                                latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                                if (!file.exists() || file.length() == 0L) {
+                                    file.delete()
+                                    runOnUiThread { result.error("A11Y_ERROR", "Screenshot file not ready", null) }
+                                    return@Thread
+                                }
+                                val blocks = OcrHelper.recognizeFromFile(file.absolutePath)
+                                val json = OcrHelper.blocksToJsonString(blocks)
+                                file.delete()
+                                runOnUiThread { result.success(json) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("A11Y_ERROR", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
+
+                "a11yHasUsageStatsPermission" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        result.success(service.hasUsageStatsPermission())
+                    }
+                }
+
+                "a11yOpenUsageStatsSettings" -> {
+                    val service = AutoService.instance
+                    if (service == null) {
+                        result.error("A11Y_NOT_RUNNING", "Accessibility service not connected", null)
+                    } else {
+                        service.openUsageStatsSettings()
+                        result.success(true)
+                    }
+                }
+
+                // =====================================================================
+                // Toast
+                // =====================================================================
+
+                "showToast" -> {
+                    val message = call.argument<String>("message") ?: ""
+                    val isLong = call.argument<Boolean>("long") ?: false
+                    if (message.isEmpty()) {
+                        result.error("INVALID_ARGS", "message required", null)
+                    } else {
+                        try {
+                            val duration = if (isLong) android.widget.Toast.LENGTH_LONG
+                                           else android.widget.Toast.LENGTH_SHORT
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                android.widget.Toast.makeText(applicationContext, message, duration).show()
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("TOAST_ERROR", e.message, null)
+                        }
+                    }
+                }
+
+                // =====================================================================
+                // JS Bridge — WebSocket Server for browser JS injection
+                // =====================================================================
+
+                "startJsBridge" -> {
+                    val port = call.argument<Int>("port") ?: 8767
+                    Thread {
+                        try {
+                            if (JsBridgeServer.getInstance() != null) {
+                                runOnUiThread { result.success(true) }
+                                return@Thread
+                            }
+                            val server = JsBridgeServer(port)
+                            server.start()
+                            // 等待端口就绪
+                            Thread.sleep(500)
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            Log.e("MainActivity", "Failed to start JsBridgeServer", e)
+                            runOnUiThread { result.error("JS_BRIDGE_ERROR", e.message, null) }
+                        }
+                    }.start()
+                }
+
+                "stopJsBridge" -> {
+                    try {
+                        JsBridgeServer.getInstance()?.stop(1000)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("JS_BRIDGE_ERROR", e.message, null)
+                    }
+                }
+
+                "isJsBridgeRunning" -> {
+                    result.success(JsBridgeServer.getInstance() != null)
+                }
+
+                "jsBridgeInfo" -> {
+                    val server = JsBridgeServer.getInstance()
+                    if (server == null) {
+                        result.success(hashMapOf(
+                            "status" to "stopped",
+                            "browser_clients" to "0"
+                        ))
+                    } else {
+                        val info = server.getInfo()
+                        result.success(info.mapValues { it.value.toString() })
+                    }
+                }
+
+                "execJsOnBrowser" -> {
+                    val code = call.argument<String>("code") ?: ""
+                    val timeoutMs = call.argument<Int>("timeout_ms")?.toLong() ?: 10000L
+                    if (code.isBlank()) {
+                        result.error("INVALID_ARGS", "code required", null)
+                    } else {
+                        val server = JsBridgeServer.getInstance()
+                        if (server == null) {
+                            result.error("JS_BRIDGE_NOT_RUNNING", "JS Bridge server not started", null)
+                        } else {
+                            Thread {
+                                try {
+                                    val jsResult = server.execJs(code, timeoutMs)
+                                    val ok = jsResult.optBoolean("ok", false)
+                                    if (ok) {
+                                        val resValue = jsResult.opt("result")?.toString() ?: ""
+                                        runOnUiThread { result.success(resValue) }
+                                    } else {
+                                        val err = jsResult.optString("error", "Unknown error")
+                                        runOnUiThread { result.error("JS_EXEC_ERROR", err, null) }
+                                    }
+                                } catch (e: Exception) {
+                                    runOnUiThread { result.error("JS_EXEC_ERROR", e.message, null) }
+                                }
+                            }.start()
+                        }
+                    }
+                }
+
+                "getJsBridgeUserscript" -> {
+                    val serverIp = call.argument<String>("server_ip") ?: "127.0.0.1"
+                    val serverPort = call.argument<Int>("server_port") ?: 8767
+                    val script = generateJsUserscript(serverIp, serverPort)
+                    result.success(script)
+                }
+
                 else -> {
                     result.notImplemented()
                 }
@@ -1411,6 +1974,153 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             fallback
         }
+    }
+
+    /**
+     * 生成浏览器油猴脚本 — 让浏览器连接到 JsBridgeServer
+     */
+    private fun generateJsUserscript(serverIp: String, serverPort: Int): String {
+        return """
+// ==UserScript==
+// @name         Hermes JS Bridge
+// @namespace    hermes-agent
+// @version      2.0
+// @description  接收 Hermes Agent 下发的 JS 命令并在当前页面执行，结果回传
+// @match        *://*/*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ── 配置 ──
+    const WS_URL = 'ws://${serverIp}:${serverPort}';
+    const RECONNECT_DELAY = 3000;
+    const PING_INTERVAL = 25000;
+
+    let ws = null;
+    let pingTimer = null;
+    let connected = false;
+
+    // ── 状态指示 ──
+    const badge = document.createElement('div');
+    Object.assign(badge.style, {
+        position: 'fixed', bottom: '8px', right: '8px', zIndex: 2147483647,
+        padding: '4px 10px', borderRadius: '12px', fontSize: '12px',
+        fontFamily: 'monospace', color: '#fff', cursor: 'pointer',
+        transition: 'opacity 0.3s', opacity: '0.7',
+        background: '#e53935',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+    });
+    badge.textContent = 'Hermes: disconnected';
+    badge.title = 'Hermes JS Bridge — 点击重连';
+    badge.onclick = () => { ws && ws.close(); connect(); };
+    document.body.appendChild(badge);
+
+    function setStatus(ok) {
+        connected = ok;
+        badge.style.background = ok ? '#43a047' : '#e53935';
+        badge.textContent = ok ? 'Hermes: connected' : 'Hermes: disconnected';
+    }
+
+    // ── 核心：执行 JS 并返回结果 ──
+    function executeJS(code) {
+        try {
+            // 先尝试当表达式求值
+            const fn = new Function('return (' + code + ')');
+            const result = fn();
+            if (result && typeof result.then === 'function') {
+                return result.then(
+                    val => ({ ok: true, result: safeStringify(val) }),
+                    err => ({ ok: false, error: String(err) })
+                );
+            }
+            return Promise.resolve({ ok: true, result: safeStringify(result) });
+        } catch (e) {
+            // 不是表达式，尝试当语句执行
+            try {
+                const fn2 = new Function(code);
+                const result2 = fn2();
+                if (result2 && typeof result2.then === 'function') {
+                    return result2.then(
+                        val => ({ ok: true, result: safeStringify(val) }),
+                        err => ({ ok: false, error: String(err) })
+                    );
+                }
+                return Promise.resolve({ ok: true, result: safeStringify(result2) });
+            } catch (e2) {
+                return Promise.resolve({ ok: false, error: String(e2) });
+            }
+        }
+    }
+
+    function safeStringify(val) {
+        if (val === undefined) return 'undefined';
+        if (val === null) return 'null';
+        try {
+            return typeof val === 'string' ? val : JSON.stringify(val);
+        } catch {
+            return String(val);
+        }
+    }
+
+    // ── WebSocket 连接 ──
+    function connect() {
+        if (ws && ws.readyState <= 1) return;
+
+        try {
+            ws = new WebSocket(WS_URL);
+        } catch (e) {
+            setStatus(false);
+            scheduleReconnect();
+            return;
+        }
+
+        ws.onopen = () => {
+            setStatus(true);
+            ws.send(JSON.stringify({ type: 'register', client_type: 'browser' }));
+            pingTimer = setInterval(() => {
+                if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+            }, PING_INTERVAL);
+        };
+
+        ws.onmessage = (e) => {
+            let msg;
+            try { msg = JSON.parse(e.data); } catch { return; }
+
+            if (msg.type === 'js_exec' && msg.id) {
+                executeJS(msg.code).then(result => {
+                    if (ws.readyState === 1) {
+                        ws.send(JSON.stringify({
+                            type: 'js_result',
+                            id: msg.id,
+                            ...result,
+                        }));
+                    }
+                });
+            }
+        };
+
+        ws.onclose = () => {
+            setStatus(false);
+            clearInterval(pingTimer);
+            scheduleReconnect();
+        };
+
+        ws.onerror = () => {
+            setStatus(false);
+        };
+    }
+
+    function scheduleReconnect() {
+        setTimeout(connect, RECONNECT_DELAY);
+    }
+
+    // ── 启动 ──
+    connect();
+})();
+""".trimIndent()
     }
 
     companion object {

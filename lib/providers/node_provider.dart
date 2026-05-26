@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/gateway_state.dart';
 import '../models/node_frame.dart';
 import '../models/node_state.dart';
+import '../services/capabilities/accessibility_capability.dart';
 import '../services/capabilities/camera_capability.dart';
 import '../services/capabilities/canvas_capability.dart';
 import '../services/capabilities/flash_capability.dart';
@@ -35,6 +36,7 @@ class NodeProvider extends ChangeNotifier with WidgetsBindingObserver {
   GatewayState? get gatewayState => _lastGatewayState;
 
   // Capabilities
+  final _accessibilityCapability = AccessibilityCapability();
   final _cameraCapability = CameraCapability();
   final _canvasCapability = CanvasCapability();
   final _flashCapability = FlashCapability();
@@ -103,6 +105,8 @@ class NodeProvider extends ChangeNotifier with WidgetsBindingObserver {
       _nodeService.registerCapability(cap.name, commands, handler);
     }
 
+    registerOne(_accessibilityCapability,
+        (cmd, params) => _accessibilityCapability.handle(cmd, params));
     registerOne(_cameraCapability,
         (cmd, params) => _cameraCapability.handleWithPermission(cmd, params));
     registerOne(_canvasCapability,

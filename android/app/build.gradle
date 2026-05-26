@@ -95,6 +95,12 @@ dependencies {
     implementation 'org.apache.commons:commons-compress:1.26.0'
     implementation 'org.tukaani:xz:1.9'
     implementation 'com.github.luben:zstd-jni:1.5.6-4@aar'
+
+    // ML Kit OCR — 中英文文字识别 (AccessibilityCapability)
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.0'
+
+    // Java-WebSocket — JS Bridge WebSocket Server
+    implementation 'org.java-websocket:Java-WebSocket:1.5.6'
 }
 
 flutter {
