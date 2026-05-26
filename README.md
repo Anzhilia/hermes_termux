@@ -5,7 +5,7 @@
 <h1 align="center">Hermes Agent</h1>
 
 <p align="center">
-  <strong>基于 OpenClaw 的 Android AI Agent 可视化管理应用</strong>
+  <strong>基于 Hermes 的 Android 可视化安装应用</strong>
 </p>
 
 <p align="center">
