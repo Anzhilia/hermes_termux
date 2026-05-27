@@ -603,9 +603,7 @@ class AutoService : AccessibilityService() {
     // ========================================================================
 
     fun getCurrentApp(): Map<String, String>? {
-        val myPkg = applicationContext.packageName
-
-        // 方法1: UsageStatsManager
+        // 方法1: UsageStatsManager — 最可靠，能拿到真实的前台 Activity
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
@@ -631,7 +629,7 @@ class AutoService : AccessibilityService() {
                                 }
                             }
                         }
-                        if (lastPkg != null && lastPkg != myPkg) {
+                        if (lastPkg != null) {
                             return mapOf(
                                 "package_name" to lastPkg,
                                 "app_name" to getAppName(lastPkg),
@@ -645,7 +643,7 @@ class AutoService : AccessibilityService() {
             Log.w(TAG, "getCurrentApp via UsageStats failed", e)
         }
 
-        // 方法2: AccessibilityService windows
+        // 方法2: AccessibilityService windows — 不如方法1准确，但无需额外权限
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 val windows = windows
@@ -654,7 +652,7 @@ class AutoService : AccessibilityService() {
                         val window = windows[i]
                         val root = window.root ?: continue
                         val pkg = root.packageName?.toString()
-                        if (pkg != null && pkg != myPkg) {
+                        if (pkg != null) {
                             root.recycle()
                             return mapOf(
                                 "package_name" to pkg,
@@ -670,13 +668,13 @@ class AutoService : AccessibilityService() {
             Log.w(TAG, "getCurrentApp via windows failed", e)
         }
 
-        // 方法3: rootInActiveWindow
+        // 方法3: rootInActiveWindow — 最后的兜底
         try {
             val root = rootInActiveWindow
             if (root != null) {
                 val pkg = root.packageName?.toString()
                 root.recycle()
-                if (pkg != null && pkg != myPkg) {
+                if (pkg != null) {
                     return mapOf(
                         "package_name" to pkg,
                         "app_name" to getAppName(pkg),

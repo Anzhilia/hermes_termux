@@ -455,6 +455,126 @@ hermes-agent/
 
 ---
 
+## 已知问题修复
+
+以下是本次修复的问题汇总，涉及 4 个文件。
+
+### 1. MainActivity.kt — 编译错误（100+ 个）
+
+**问题**：第 930 行多了一个 `}`，导致 `when (call.method)` 代码块提前关闭。后续所有分支（无障碍服务、JS Bridge 等）脱离 `when` 块，花括号深度错位，最终 class 在第 1526 行提前闭合，companion object 常量和所有 private 方法被甩到 class 外面，引发 100+ 个 "Unresolved reference" 和 "Syntax error"。
+
+**修复**：删除第 930 行多余的 `}`。
+
+```diff
+                     }.start()
+                 }
+-                }
+                 // Accessibility Service — UI Automation
+```
+
+### 2. AutoService.kt — getCurrentApp() 始终返回"系统桌面"
+
+**问题**：`getCurrentApp()` 三个降级方法（UsageStatsManager、AccessibilityService windows、rootInActiveWindow）全部写了 `pkg != myPkg` 过滤。当用户在 App 内测试时，前台就是自己，但被跳过，只能降级返回系统桌面。
+
+**修复**：移除三处 `!= myPkg` 过滤，`getCurrentApp()` 如实返回前台 App（包括自身）。
+
+```diff
+- if (lastPkg != null && lastPkg != myPkg) {
++ if (lastPkg != null) {
+```
+
+### 3. accessibility_capability.dart — AI Agent 帮助系统
+
+**问题**：Agent 首次使用节点无障碍能力时，容易发错命令格式，而原来的错误信息只有 "Missing text"、"Unknown command" 等简短提示，Agent 无法学会正确用法。
+
+**修复**：
+- 新增 `accessibility.help` 命令，支持按 topic 查看详细用法
+- 所有 `INVALID_ARGS` 错误信息附带正确用法示例
+- 未知命令自动返回最接近的建议（Levenshtein 编辑距离匹配）
+- `A11Y_NOT_RUNNING` 错误附带开启指引
+- 新增 `quickstart` topic，教 Agent "先 ui_tree 看结构，再 find/click_text 操作"
+
+```
+→ accessibility.help {}                        // 命令索引
+→ accessibility.help { "topic": "quickstart" } // 上手指南
+→ accessibility.help { "topic": "batch" }      // 批量操作用法
+```
+
+### 4. node_ws_server.py — Gateway 节点 WebSocket 服务
+
+**问题**：
+- `node.invoke.result` 收到后没有回 ack，App 端 `sendRequest` 会等 15 秒超时
+- Event 类型消息（如 `node.capabilities` 推送）被丢弃，服务端命令列表不更新
+- `asyncio.get_event_loop()` 在 Python 3.10+ 已废弃
+
+**修复**：
+- 收到 `node.invoke.result` 后回 `{"type":"res","id":...,"ok":true}` ack
+- 新增 `msg_type == "event"` 分支，处理 `node.capabilities` 能力推送
+- 改用 `self._loop.create_future()`
+- 新增 `_send_to_node()` 辅助方法
+
+### 修复文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `android/.../MainActivity.kt` | 删除多余 `}` |
+| `android/.../AutoService.kt` | `getCurrentApp()` 移除 myPkg 过滤 |
+| `lib/services/capabilities/accessibility_capability.dart` | Help 系统 + 错误信息优化 |
+| `assets/scripts/node_ws_server.py` | ack 回复 + event 处理 + API 更新 |
+
+---
+
+## v2 修复：Node 配对 / MCP 路由 / 浏览器冲突
+
+### 问题描述
+
+1. **MCP invoke 断裂**：MCP adapter 用 event 类型发送 `node.invoke.request`，server 创建了 pending invoke 但 MCP adapter 没有，结果永远等不到
+2. **配对流程不匹配**：Server 配对后等 raw3（同连接重连），但 App 配对后断开重连，流程卡死
+3. **浏览器/App 双连接冲突**：两者同时注册相同命令（`accessibility.js_exec` 等），server 随机选节点，指令发错目标
+4. **浏览器无法连接**：当 server 配置 auth_token 时，浏览器空 token 进入配对流程，60s 超时无限循环
+5. **invoke 结果含 metadata**：`invoke_command()` 返回 `{id, nodeId, ok, payloadJSON}` 等多余字段
+
+### 修复方案
+
+**架构变更：**
+```
+Gateway → MCP → WS Server (:18780)
+                  ├─ JS 命令 → Browser (直接执行，优先级高)
+                  └─ Native 命令 → App (camera/tap/swipe 等)
+```
+
+**App 端：** 移除 `js_exec`、`js_bridge_*`、`canvas.*` 等 JS 命令注册，JS 能力完全由浏览器节点提供。
+
+**浏览器端：** 只连 WS Server（单通道），不连 JsBridgeServer。注册 `platform: "browser"` 类型标识。
+
+### 修复文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `assets/scripts/node_ws_server.py` | 浏览器免 token 验证；MCP invoke 改 request 类型路由；配对流程修复（断开重连）；JS 命令优先 Browser 路由；invoke_command 解析 payloadJSON；节点断开清理 pending invokes |
+| `assets/scripts/node_mcp_adapter.py` | invoke 改用 request 类型发送；响应匹配 `type=res`；解析 payloadJSON 返回干净结果 |
+| `assets/scripts/userscript-hermes-browser-node.user.js` | 单通道（仅 WS Server）；注册 `platform: "browser"`；支持手动断开/重连 |
+| `lib/services/capabilities/accessibility_capability.dart` | 注释掉 `js_exec`、`js_bridge_start`、`js_bridge_stop`、`js_bridge_info`、`js_bridge_userscript` 5 个 JS 命令注册 |
+
+### 完整数据流
+
+**camera.snap（Native 命令）：**
+```
+Gateway → MCP adapter → WS Server → App (优先) → 拍照 → 返回结果
+```
+
+**accessibility.js_exec（JS 命令）：**
+```
+Gateway → MCP adapter → WS Server → Browser (优先) → 执行 JS → 返回结果
+```
+
+**Browser 离线时的 js_exec：**
+```
+Gateway → MCP adapter → WS Server → 无可用节点 → 返回 NO_NODE 错误
+```
+
+---
+
 ## 致谢
 
 - [openclaw/openclaw](https://github.com/openclaw/openclaw) — OpenClaw 核心项目

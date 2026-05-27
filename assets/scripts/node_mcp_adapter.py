@@ -13,6 +13,11 @@ Usage in config.yaml:
         NODE_WS_URL: "ws://127.0.0.1:18780"
         NODE_AUTH_TOKEN: "<token>"
       timeout: 60
+
+v2 修复:
+  - invoke 改用 request 类型发送（而非 event），server 正确返回结果
+  - 修复响应匹配逻辑：等待 type=res 的响应帧
+  - 支持 nodeId 指定路由（默认 "*" 由 server 自动选择最优节点）
 """
 
 from __future__ import annotations
@@ -118,6 +123,59 @@ TOOL_DEFS: dict[str, dict] = {
         "description": "Read phone sensors (accelerometer, gyroscope, etc.)",
         "schema": {"type": "object", "properties": {}},
     },
+    # ── JS / Browser commands ──
+    "js_exec": {
+        "command": "accessibility.js_exec",
+        "description": "Execute JavaScript on the current browser page (via browser-node or phone app JS bridge)",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "JavaScript code to execute in the page context",
+                },
+            },
+            "required": ["code"],
+        },
+    },
+    "js_bridge_info": {
+        "command": "accessibility.js_bridge_info",
+        "description": "Get JS bridge status and current page info",
+        "schema": {"type": "object", "properties": {}},
+    },
+    "canvas_eval": {
+        "command": "canvas.eval",
+        "description": "Evaluate JavaScript in the phone's WebView context",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "script": {
+                    "type": "string",
+                    "description": "JavaScript code to evaluate",
+                },
+            },
+            "required": ["script"],
+        },
+    },
+    "canvas_navigate": {
+        "command": "canvas.navigate",
+        "description": "Navigate the phone's WebView to a URL",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL to navigate to",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    "canvas_snapshot": {
+        "command": "canvas.snapshot",
+        "description": "Get current WebView snapshot info (URL, title, viewport)",
+        "schema": {"type": "object", "properties": {}},
+    },
 }
 
 
@@ -126,8 +184,10 @@ class NodeMcpAdapter:
 
     def __init__(self):
         self._ws = None
+        self._ws_ctx = None
         self._connected = False
         self._commands: list[str] = []
+        self._invoke_counter = 0
 
     async def connect(self):
         """Connect to the node WS server and register as a pseudo-node.
@@ -186,7 +246,7 @@ class NodeMcpAdapter:
                         "client": {
                             "id": "node-mcp-adapter",
                             "displayName": "Node MCP Adapter",
-                            "version": "1.0.0",
+                            "version": "2.0.0",
                             "platform": "mcp",
                             "mode": "node",
                         },
@@ -264,7 +324,7 @@ class NodeMcpAdapter:
         """Safely close WebSocket connection."""
         if self._ws:
             try:
-                if hasattr(self, '_ws_ctx') and self._ws_ctx is not None:
+                if self._ws_ctx is not None:
                     await self._ws_ctx.__aexit__(None, None, None)
                 else:
                     await self._ws.close()
@@ -274,43 +334,62 @@ class NodeMcpAdapter:
             self._ws_ctx = None
 
     async def invoke(self, command: str, params: dict | None = None) -> dict:
-        """Invoke a command on the connected node via the WS server."""
+        """Invoke a command on the connected node via the WS server.
+
+        v2 Fix: Send as request type so server returns result as response.
+        The server routes the invoke to the best available node and returns
+        the result directly.
+        """
         if not self._connected or not self._ws:
             raise RuntimeError("Not connected to node server")
 
-        invoke_id = f"mcp-inv-{id(command)}"
-        payload = {
-            "id": invoke_id,
-            "nodeId": "*",  # Let server pick any node with this command
-            "command": command,
-            "paramsJSON": json.dumps(params or {}),
-            "timeoutMs": int(INVOKE_TIMEOUT * 1000),
+        self._invoke_counter += 1
+        invoke_id = f"mcp-inv-{self._invoke_counter}"
+
+        # Send as REQUEST (not event) — server will route and return result
+        request_frame = {
+            "type": "request",
+            "id": f"mcp-req-{self._invoke_counter}",
+            "request": "node.invoke.request",
+            "payload": {
+                "id": invoke_id,
+                "nodeId": "*",  # Let server pick any node with this command
+                "command": command,
+                "paramsJSON": json.dumps(params or {}),
+                "timeoutMs": int(INVOKE_TIMEOUT * 1000),
+            },
         }
+        await self._ws.send(json.dumps(request_frame))
+        logger.info(f"Sent invoke request: {command} (id={invoke_id})")
 
-        await self._ws.send(json.dumps({
-            "type": "event",
-            "event": "node.invoke.request",
-            "payload": payload,
-        }))
-
-        # Wait for invoke result
+        # Wait for the response (type=res) from server
         deadline = asyncio.get_event_loop().time() + INVOKE_TIMEOUT
         while asyncio.get_event_loop().time() < deadline:
             try:
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=INVOKE_TIMEOUT)
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                raw = await asyncio.wait_for(self._ws.recv(), timeout=remaining)
                 msg = json.loads(raw)
-                if msg.get("request") == "node.invoke.result":
-                    result = msg.get("payload", {})
-                    if result.get("id") == invoke_id:
-                        if result.get("ok") is False:
-                            raise RuntimeError(
-                                result.get("error", {}).get("message", "Invoke failed")
-                            )
-                        # Parse payloadJSON
-                        payload_json = result.get("payloadJSON")
-                        if payload_json:
-                            return json.loads(payload_json)
-                        return result
+
+                # Match response to our request
+                if msg.get("type") == "res" and msg.get("id") == f"mcp-req-{self._invoke_counter}":
+                    if msg.get("ok") is False:
+                        error = msg.get("error", {})
+                        raise RuntimeError(
+                            f"Invoke failed: {error.get('message', 'unknown error')} "
+                            f"(code={error.get('code', '?')})"
+                        )
+                    # Extract result from payload
+                    payload = msg.get("payload", {})
+                    payload_json = payload.get("payloadJSON")
+                    if payload_json:
+                        return json.loads(payload_json)
+                    return payload
+
+                # Skip other messages (events, etc.)
+                logger.debug(f"MCP adapter ignoring message: type={msg.get('type')}")
+
             except asyncio.TimeoutError:
                 raise RuntimeError(f"Invoke timed out: {command}")
 
@@ -390,7 +469,7 @@ async def run_mcp_server():
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "hermes-node-bridge", "version": "1.0.0"},
+                    "serverInfo": {"name": "hermes-node-bridge", "version": "2.0.0"},
                 },
             }
 

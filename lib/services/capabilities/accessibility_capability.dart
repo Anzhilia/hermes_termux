@@ -37,6 +37,7 @@ class AccessibilityCapability extends CapabilityHandler {
 
   @override
   List<String> get commands => [
+        'help',
         'tap',
         'swipe',
         'input',
@@ -59,11 +60,12 @@ class AccessibilityCapability extends CapabilityHandler {
         'ocr',
         'batch',
         'toast',
-        'js_exec',
-        'js_bridge_start',
-        'js_bridge_stop',
-        'js_bridge_info',
-        'js_bridge_userscript',
+        // JS 命令已移除 — 由浏览器节点直接处理
+        // 'js_exec',
+        // 'js_bridge_start',
+        // 'js_bridge_stop',
+        // 'js_bridge_info',
+        // 'js_bridge_userscript',
         'logs',
         'logs_clear',
       ];
@@ -91,13 +93,21 @@ class AccessibilityCapability extends CapabilityHandler {
 
   @override
   Future<NodeFrame> handle(String command, Map<String, dynamic> params) async {
+    // help 命令不需要无障碍服务运行
+    if (command == 'accessibility.help') {
+      final topic = params['topic'] as String?;
+      return _help(topic);
+    }
+
     // 检查无障碍服务是否连接
     final isRunning = await NativeBridge.isAccessibilityServiceRunning();
     if (!isRunning) {
       return NodeFrame.response('', error: {
         'code': 'A11Y_NOT_RUNNING',
         'message':
-            'Accessibility service not connected. Please enable it in Android Settings > Accessibility > Hermes Agent.',
+            'Accessibility service not connected. Enable it first:\n'
+            'Android Settings > Accessibility > Hermes Agent > ON\n\n'
+            'Then run: accessibility.help { "topic": "quickstart" }',
       });
     }
 
@@ -192,9 +202,13 @@ class AccessibilityCapability extends CapabilityHandler {
           result = await _logsClear(params);
           break;
         default:
+          // 未知命令：返回 help 提示 + 最接近的建议
+          final suggestion = _suggestCommand(command);
           result = NodeFrame.response('', error: {
             'code': 'UNKNOWN_COMMAND',
-            'message': 'Unknown accessibility command: $command',
+            'message': 'Unknown command: $command\n'
+                '${suggestion != null ? "Did you mean: $suggestion?\n" : ""}'
+                'Run "accessibility.help" to see all available commands.',
           });
       }
 
@@ -226,7 +240,10 @@ class AccessibilityCapability extends CapabilityHandler {
     if (x < 0 || y < 0) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing or invalid x, y coordinates',
+        'message': 'Missing or invalid x, y coordinates.\n'
+            'Usage: accessibility.tap { "x": 540, "y": 1200 }\n'
+            'Tip: prefer click_text over raw coordinates. '
+            'Run accessibility.help { "topic": "tap" } for details.',
       });
     }
     final ok = await NativeBridge.a11yTap(x, y);
@@ -242,7 +259,8 @@ class AccessibilityCapability extends CapabilityHandler {
     if (x1 < 0 || y1 < 0 || x2 < 0 || y2 < 0) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing x1, y1, x2, y2',
+        'message': 'Missing x1, y1, x2, y2.\n'
+            'Usage: accessibility.swipe { "x1": 540, "y1": 1800, "x2": 540, "y2": 400, "duration": 300 }',
       });
     }
     final ok = await NativeBridge.a11ySwipe(x1, y1, x2, y2, duration);
@@ -255,7 +273,9 @@ class AccessibilityCapability extends CapabilityHandler {
     if (text.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing text',
+        'message': 'Missing text.\n'
+            'Usage: accessibility.input { "text": "Hello World" }\n'
+            'Tip: tap the input field first, then call input.',
       });
     }
     final ok = await NativeBridge.a11yInput(text, append: append);
@@ -267,7 +287,9 @@ class AccessibilityCapability extends CapabilityHandler {
     if (key.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing key (back/home/recents/notifications)',
+        'message': 'Missing key.\n'
+            'Usage: accessibility.key { "key": "back" }\n'
+            'Valid keys: back, home, recents, notifications',
       });
     }
     final ok = await NativeBridge.a11yKey(key);
@@ -293,7 +315,10 @@ class AccessibilityCapability extends CapabilityHandler {
         (desc == null || desc.isEmpty)) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Provide at least one of: text, id, description',
+        'message': 'Provide at least one of: text, id, description.\n'
+            'Usage: accessibility.find { "text": "Login" }\n'
+            '       accessibility.find { "id": "com.example:id/btn" }\n'
+            'Run accessibility.help { "topic": "find" } for details.',
       });
     }
 
@@ -323,7 +348,8 @@ class AccessibilityCapability extends CapabilityHandler {
         (desc == null || desc.isEmpty)) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Provide at least one of: text, id, description',
+        'message': 'Provide at least one of: text, id, description.\n'
+            'Usage: accessibility.wait { "text": "Welcome", "timeout": 5000 }',
       });
     }
 
@@ -346,7 +372,8 @@ class AccessibilityCapability extends CapabilityHandler {
     if (text.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing text',
+        'message': 'Missing text.\n'
+            'Usage: accessibility.click_text { "text": "Login" }',
       });
     }
     final ok = await NativeBridge.a11yClickText(text);
@@ -359,7 +386,8 @@ class AccessibilityCapability extends CapabilityHandler {
     if (id.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing id',
+        'message': 'Missing id.\n'
+            'Usage: accessibility.click_id { "id": "com.example:id/btn" }',
       });
     }
     final ok = await NativeBridge.a11yClickId(id);
@@ -409,7 +437,8 @@ class AccessibilityCapability extends CapabilityHandler {
     if (text.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing text',
+        'message': 'Missing text.\n'
+            'Usage: accessibility.clipboard_write { "text": "Hello" }',
       });
     }
     final ok = await NativeBridge.a11yClipboardWrite(text);
@@ -431,7 +460,9 @@ class AccessibilityCapability extends CapabilityHandler {
     } else {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': "Provide both 'stream' and 'level' to set, or neither to get",
+        'message': "Provide both 'stream' and 'level' to set, or neither to get.\n"
+            'Get:  accessibility.volume {}\n'
+            'Set:  accessibility.volume { "stream": "music", "level": 8 }',
       });
     }
   }
@@ -442,7 +473,8 @@ class AccessibilityCapability extends CapabilityHandler {
     if (x < 0 || y < 0) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing x, y',
+        'message': 'Missing x, y.\n'
+            'Usage: accessibility.color { "x": 100, "y": 200 }',
       });
     }
     final color = await NativeBridge.a11yColor(x, y);
@@ -469,7 +501,9 @@ class AccessibilityCapability extends CapabilityHandler {
     if (pkg.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing package name',
+        'message': 'Missing package name.\n'
+            'Usage: accessibility.launch_app { "package": "com.tencent.mm" }\n'
+            'Tip: use accessibility.installed_apps to find package names.',
       });
     }
     final ok = await NativeBridge.a11yLaunchApp(
@@ -511,7 +545,15 @@ class AccessibilityCapability extends CapabilityHandler {
     if (operations == null || operations.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing operations array',
+        'message': 'Missing operations array.\n'
+            'Usage: accessibility.batch {\n'
+            '  "operations": [\n'
+            '    {"action": "click_text", "text": "搜索"},\n'
+            '    {"action": "wait", "ms": 500},\n'
+            '    {"action": "input", "text": "hello"}\n'
+            '  ]\n'
+            '}\n'
+            'Actions: tap, swipe, input, click_text, click_id, scroll, key, wait, launch',
       });
     }
 
@@ -592,7 +634,8 @@ class AccessibilityCapability extends CapabilityHandler {
     if (message.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing message',
+        'message': 'Missing message.\n'
+            'Usage: accessibility.toast { "message": "Done!", "long": false }',
       });
     }
     final isLong = params['long'] as bool? ?? false;
@@ -611,7 +654,8 @@ class AccessibilityCapability extends CapabilityHandler {
     if (code.isEmpty) {
       return NodeFrame.response('', error: {
         'code': 'INVALID_ARGS',
-        'message': 'Missing code',
+        'message': 'Missing code.\n'
+            'Usage: accessibility.js_exec { "code": "document.title" }',
       });
     }
 
@@ -629,8 +673,12 @@ class AccessibilityCapability extends CapabilityHandler {
     if (browserCount == 0) {
       return NodeFrame.response('', error: {
         'code': 'NO_BROWSER_CLIENTS',
-        'message':
-            'No browser clients connected. Install the userscript and open a page.',
+        'message': 'No browser clients connected.\n'
+            'Setup steps:\n'
+            '1. accessibility.js_bridge_start { "port": 8767 }\n'
+            '2. accessibility.js_bridge_userscript { "server_ip": "<phone_ip>" }\n'
+            '3. Install userscript in Tampermonkey\n'
+            '4. Open any webpage — wait for "Hermes: connected" badge',
       });
     }
 
@@ -768,4 +816,405 @@ class AccessibilityCapability extends CapabilityHandler {
     final summary = keys.map((k) => '$k=${payload[k]}').join(',');
     return summary.length > 100 ? '${summary.substring(0, 100)}...' : summary;
   }
+
+  // ==========================================================================
+  // Help System — 教 AI agent 如何使用无障碍能力
+  // ==========================================================================
+
+  /// 未知命令时，返回最接近的建议
+  String? _suggestCommand(String unknown) {
+    // 去掉前缀 "accessibility."
+    final input = unknown.replaceFirst('accessibility.', '').toLowerCase();
+    final allCommands = commands.where((c) => c != 'help').toList();
+
+    // 简单编辑距离匹配
+    String? best;
+    int bestDist = 999;
+    for (final cmd in allCommands) {
+      final dist = _levenshtein(input, cmd);
+      if (dist < bestDist && dist <= 3) {
+        bestDist = dist;
+        best = 'accessibility.$cmd';
+      }
+    }
+    return best;
+  }
+
+  int _levenshtein(String a, String b) {
+    if (a.isEmpty) return b.length;
+    if (b.isEmpty) return a.length;
+    final matrix = List.generate(
+      a.length + 1,
+      (i) => List.generate(b.length + 1, (j) => 0),
+    );
+    for (int i = 0; i <= a.length; i++) matrix[i][0] = i;
+    for (int j = 0; j <= b.length; j++) matrix[0][j] = j;
+    for (int i = 1; i <= a.length; i++) {
+      for (int j = 1; j <= b.length; j++) {
+        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+        matrix[i][j] = [
+          matrix[i - 1][j] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j - 1] + cost,
+        ].reduce((a, b) => a < b ? a : b);
+      }
+    }
+    return matrix[a.length][b.length];
+  }
+
+  Future<NodeFrame> _help(String? topic) async {
+    final t = topic?.toLowerCase() ?? 'index';
+
+    String content;
+    switch (t) {
+      case 'quickstart':
+        content = _helpQuickstart();
+        break;
+      case 'tap':
+      case 'click':
+        content = _helpTap();
+        break;
+      case 'swipe':
+        content = _helpSwipe();
+        break;
+      case 'input':
+      case 'type':
+      case 'text':
+        content = _helpInput();
+        break;
+      case 'find':
+      case 'search':
+      case 'element':
+        content = _helpFind();
+        break;
+      case 'scroll':
+        content = _helpScroll();
+        break;
+      case 'key':
+      case 'keys':
+      case 'global':
+        content = _helpKey();
+        break;
+      case 'screenshot':
+      case 'screen':
+        content = _helpScreenshot();
+        break;
+      case 'tree':
+      case 'ui_tree':
+      case 'uitree':
+        content = _helpUiTree();
+        break;
+      case 'ocr':
+        content = _helpOcr();
+        break;
+      case 'batch':
+        content = _helpBatch();
+        break;
+      case 'app':
+      case 'current_app':
+      case 'launch':
+        content = _helpApp();
+        break;
+      case 'js':
+      case 'jsbridge':
+      case 'js_bridge':
+        content = _helpJsBridge();
+        break;
+      default:
+        content = _helpIndex();
+    }
+
+    return NodeFrame.response('', payload: {
+      'topic': t,
+      'content': content,
+    });
+  }
+
+  String _helpIndex() => '''
+=== Accessibility Help ===
+
+Run: accessibility.help { "topic": "<topic>" }
+
+Topics:
+  quickstart  — 上手指南（必读）
+  tap         — 坐标点击
+  swipe       — 滑动手势
+  input       — 文本输入
+  find        — 查找 UI 元素
+  scroll      — 滚动
+  key         — 全局按键（返回/主页/最近任务）
+  screenshot  — 截图
+  ui_tree     — 获取 UI 树结构
+  ocr         — OCR 文字识别
+  batch       — 批量操作
+  app         — 当前 App / 启动 App
+  js_bridge   — 浏览器 JS 注入
+
+Commands (all prefixed with "accessibility."):
+  help, tap, swipe, input, key, scroll, find, wait,
+  click_text, click_id, screenshot, ui_tree, current_app,
+  device_info, clipboard_read, clipboard_write, volume,
+  color, installed_apps, launch_app, ocr, batch, toast,
+  js_exec, js_bridge_start, js_bridge_stop, js_bridge_info,
+  js_bridge_userscript, logs, logs_clear
+''';
+
+  String _helpQuickstart() => '''
+=== Quickstart Guide ===
+
+1. Check service status:
+   → accessibility.current_app {}
+
+2. See what's on screen:
+   → accessibility.ui_tree {}       ← returns XML tree
+   → accessibility.screenshot {}    ← returns base64 JPEG
+
+3. Find and tap an element:
+   → accessibility.find { "text": "Settings" }
+   → accessibility.click_text { "text": "Settings" }
+
+4. Wait for an element to appear:
+   → accessibility.wait { "text": "Loading...", "timeout": 5000 }
+
+5. Type text into a field:
+   → accessibility.input { "text": "Hello World" }
+
+6. Navigate:
+   → accessibility.key { "key": "back" }
+   → accessibility.key { "key": "home" }
+   → accessibility.scroll { "direction": "down" }
+
+7. Batch multiple actions:
+   → accessibility.batch {
+       "operations": [
+         {"action": "tap", "x": 540, "y": 1200},
+         {"action": "wait", "ms": 500},
+         {"action": "input", "text": "hello"}
+       ]
+     }
+
+Best Practice:
+  ★ ALWAYS call ui_tree or find FIRST to understand the screen
+  ★ Use click_text/find with text/id instead of raw coordinates
+  ★ Use wait after actions that trigger page transitions
+  ★ Use batch for multi-step workflows (faster than individual calls)
+''';
+
+  String _helpTap() => '''
+=== accessibility.tap ===
+
+Tap at screen coordinates.
+
+Params:
+  x (int, required) — X coordinate
+  y (int, required) — Y coordinate
+
+Example:
+  → accessibility.tap { "x": 540, "y": 1200 }
+
+Better approach — use click_text instead of raw coordinates:
+  → accessibility.click_text { "text": "OK" }
+  → accessibility.click_id { "id": "com.example:id/btn_submit" }
+''';
+
+  String _helpSwipe() => '''
+=== accessibility.swipe ===
+
+Swipe gesture from (x1,y1) to (x2,y2).
+
+Params:
+  x1, y1 (int, required) — start point
+  x2, y2 (int, required) — end point
+  duration (int, optional) — ms, default 300
+
+Example:
+  → accessibility.swipe { "x1": 540, "y1": 1800, "x2": 540, "y2": 400, "duration": 300 }
+''';
+
+  String _helpInput() => '''
+=== accessibility.input ===
+
+Type text into the currently focused input field.
+
+Params:
+  text (string, required) — text to type
+  append (bool, optional) — append instead of replace, default false
+
+Workflow:
+  1. Tap the input field first:
+     → accessibility.tap { "x": 300, "y": 500 }
+  2. Then type:
+     → accessibility.input { "text": "Hello" }
+
+Or use find + click to focus, then input.
+''';
+
+  String _helpFind() => '''
+=== accessibility.find ===
+
+Find UI elements on screen. Provide at least one of: text, id, description.
+
+Params:
+  text (string) — match by visible text (partial match OK)
+  id (string) — match by resource-id (exact)
+  description (string) — match by content-description
+  class_name (string) — filter by class
+  clickable_only (bool) — only return clickable elements
+
+Example:
+  → accessibility.find { "text": "Login" }
+  → accessibility.find { "id": "com.example:id/input_email" }
+
+Returns: { "count": N, "nodes": [...] }
+Each node: { text, resource_id, content_desc, class, bounds, clickable, ... }
+
+=== accessibility.wait ===
+
+Wait for an element to appear (polls repeatedly).
+
+Params: same as find + timeout (int, ms, default 5000) + poll_interval (int, ms, default 300)
+
+Example:
+  → accessibility.wait { "text": "Welcome", "timeout": 10000 }
+
+Returns: { "found": true/false, "node": {...} }
+''';
+
+  String _helpScroll() => '''
+=== accessibility.scroll ===
+
+Scroll the screen.
+
+Params:
+  direction (string) — "up" | "down" | "left" | "right"
+
+Example:
+  → accessibility.scroll { "direction": "down" }
+''';
+
+  String _helpKey() => '''
+=== accessibility.key ===
+
+Press a global navigation key.
+
+Params:
+  key (string) — "back" | "home" | "recents" | "notifications"
+
+Example:
+  → accessibility.key { "key": "back" }
+  → accessibility.key { "key": "home" }
+''';
+
+  String _helpScreenshot() => '''
+=== accessibility.screenshot ===
+
+Take a screenshot. Returns base64-encoded JPEG.
+
+No params required.
+Example:
+  → accessibility.screenshot {}
+
+Returns: { "base64": "/9j/4AAQ...", "format": "jpeg" }
+Requires Android 11+.
+''';
+
+  String _helpUiTree() => '''
+=== accessibility.ui_tree ===
+
+Dump the current screen's UI tree as XML.
+
+No params required.
+Example:
+  → accessibility.ui_tree {}
+
+Returns: { "xml": "<?xml ..." }
+
+★ This is the MOST IMPORTANT command. Always use it first to understand the screen structure before tapping/finding elements.
+''';
+
+  String _helpOcr() => '''
+=== accessibility.ocr ===
+
+Screenshot + ML Kit OCR. Recognizes Chinese + English text.
+
+No params required.
+Example:
+  → accessibility.ocr {}
+
+Returns: { "blocks_count": N, "blocks": [...] }
+Each block has text and bounding box.
+
+Use this when ui_tree can't see text (e.g., Canvas, WebView, images).
+''';
+
+  String _helpBatch() => '''
+=== accessibility.batch ===
+
+Execute multiple actions in sequence.
+
+Params:
+  operations (array, required) — list of actions
+  delay_ms (int, optional) — delay between actions, default 100
+
+Each operation: { "action": "<action>", ...params }
+Actions: tap, swipe, input, click_text, click_id, scroll, key, wait, launch
+
+Example:
+  → accessibility.batch {
+      "delay_ms": 200,
+      "operations": [
+        {"action": "click_text", "text": "搜索"},
+        {"action": "wait", "ms": 500},
+        {"action": "input", "text": "张三"},
+        {"action": "key", "key": "enter"}
+      ]
+    }
+''';
+
+  String _helpApp() => '''
+=== accessibility.current_app ===
+
+Get the current foreground app info.
+No params. Returns: { "package_name", "app_name", "activity" }
+
+=== accessibility.launch_app ===
+
+Launch an app by package name.
+
+Params:
+  package (string, required) — e.g. "com.tencent.mm" (WeChat)
+  action (string, optional) — Intent action
+  uri (string, optional) — Intent data URI
+  type (string, optional) — MIME type
+
+Example:
+  → accessibility.launch_app { "package": "com.tencent.mm" }
+
+=== accessibility.installed_apps ===
+
+List installed apps. No params.
+Returns: { "count": N, "apps": [{ "package_name", "app_name" }] }
+''';
+
+  String _helpJsBridge() => '''
+=== JS Bridge — 浏览器 JS 注入 ===
+
+Execute JavaScript in a connected browser via WebSocket.
+
+Setup:
+  1. Start bridge:  accessibility.js_bridge_start { "port": 8767 }
+  2. Get userscript: accessibility.js_bridge_userscript { "server_ip": "<phone_ip>" }
+  3. Install userscript in phone browser (Tampermonkey)
+  4. Open any webpage — green "Hermes: connected" badge appears
+
+Execute JS:
+  → accessibility.js_exec { "code": "document.title" }
+  → accessibility.js_exec { "code": "document.querySelector('#btn').click()" }
+
+Check status:
+  → accessibility.js_bridge_info {}
+
+Stop:
+  → accessibility.js_bridge_stop {}
+''';
 }

@@ -927,7 +927,6 @@ class MainActivity : FlutterActivity() {
                         }
                     }.start()
                 }
-                }
 
                 // =====================================================================
                 // Accessibility Service — UI Automation
